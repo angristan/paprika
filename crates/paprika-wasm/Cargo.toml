@@ -1,0 +1,20 @@
+[package]
+name = "paprika-wasm"
+description = "Browser WebAssembly bindings for Paprika"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook.workspace = true
+js-sys.workspace = true
+paprika-core = { path = "../paprika-core" }
+paprika-pdf = { path = "../paprika-pdf" }
+serde-wasm-bindgen.workspace = true
+wasm-bindgen.workspace = true

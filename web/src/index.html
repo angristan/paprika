@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f3ecdd" />
+    <meta
+      name="description"
+      content="Reflow PDF pages for an e-reader or phone. Conversion runs locally in your browser."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>Paprika — local PDF reflow</title>
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="wordmark" href="/" aria-label="Paprika home">
+        <span class="mark" aria-hidden="true">P</span>
+        <span>Paprika</span>
+      </a>
+      <p>PDF reflow press · browser edition</p>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="title">
+        <p class="eyebrow">Small-screen typesetting</p>
+        <h1 id="title">Make stubborn PDFs readable.</h1>
+        <p>
+          Paprika trims paper margins, follows columns, and repacks graphical text for your
+          e-reader or phone. The document stays in this browser tab.
+        </p>
+      </section>
+
+      <section class="workbench" aria-label="PDF conversion workbench">
+        <form id="job-form" class="job-ticket">
+          <div class="ticket-heading">
+            <span>Job ticket</span>
+            <span id="job-number">No. —</span>
+          </div>
+
+          <label id="drop-zone" class="drop-zone" for="source-file">
+            <input id="source-file" type="file" accept="application/pdf,.pdf" />
+            <span class="drop-title">Choose a PDF</span>
+            <span class="drop-help">or drop one here · 64 MiB maximum</span>
+          </label>
+
+          <div id="file-facts" class="file-facts" hidden>
+            <span id="file-name"></span>
+            <span id="file-size"></span>
+          </div>
+
+          <fieldset>
+            <legend>Composition</legend>
+            <label>
+              Mode
+              <select id="mode" name="mode">
+                <option value="reflow">Reflow text</option>
+                <option value="fit-width">Fit width</option>
+                <option value="fit-page">Fit page</option>
+              </select>
+            </label>
+            <label>
+              Device
+              <select id="preset" name="preset">
+                <option value="758x1024x167">Kindle 6″ · 758 × 1024</option>
+                <option value="1072x1448x300">Kindle Paperwhite · 1072 × 1448</option>
+                <option value="1080x1440x265">Kobo Libra · 1080 × 1440</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <div class="field-pair">
+              <label>
+                Width <span>px</span>
+                <input id="width" name="width" type="number" min="128" max="8192" value="758" />
+              </label>
+              <label>
+                Height <span>px</span>
+                <input id="height" name="height" type="number" min="128" max="8192" value="1024" />
+              </label>
+            </div>
+            <div class="field-pair">
+              <label>
+                Margin <span>px</span>
+                <input id="margin" name="margin" type="number" min="0" max="512" value="24" />
+              </label>
+              <label>
+                Text size <span>pt</span>
+                <input id="font-size" name="fontSize" type="number" min="4" max="72" step="0.5" value="12" />
+              </label>
+            </div>
+          </fieldset>
+
+          <details>
+            <summary>Source analysis</summary>
+            <div class="advanced-fields">
+              <label>
+                Output resolution <span>dpi</span>
+                <input id="dpi" name="dpi" type="number" min="36" max="600" value="167" />
+              </label>
+              <label>
+                Render resolution <span>dpi</span>
+                <input id="source-dpi" name="sourceDpi" type="number" min="36" max="600" value="144" />
+              </label>
+              <label>
+                White threshold
+                <input id="threshold" name="threshold" type="number" min="1" max="255" value="245" />
+              </label>
+              <label>
+                Maximum columns
+                <select id="columns" name="columns">
+                  <option value="2">Detect up to 2</option>
+                  <option value="1">Single column</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
+          <div class="actions">
+            <button id="convert" type="submit" disabled>Reflow PDF</button>
+            <button id="cancel" class="quiet-button" type="button" hidden>Cancel</button>
+          </div>
+        </form>
+
+        <aside class="proof" aria-labelledby="proof-title">
+          <div class="proof-heading">
+            <h2 id="proof-title">Output sheet</h2>
+            <output id="dimensions">758 × 1024 px · 167 dpi</output>
+          </div>
+          <div class="sheet-stage" aria-hidden="true">
+            <div id="sheet" class="sheet">
+              <span></span><span></span><span></span><span></span><span></span>
+              <i>reflow</i>
+            </div>
+          </div>
+          <div id="status" class="status" role="status" aria-live="polite">
+            <span class="status-label">Waiting</span>
+            <p>Select a PDF to prepare a local conversion.</p>
+            <progress id="progress" hidden></progress>
+          </div>
+          <a id="download" class="download" href="#" download hidden>Download output PDF</a>
+          <p class="privacy-note">
+            <strong>Private by construction.</strong> There is no upload endpoint. Closing this tab
+            clears the working document from browser memory.
+          </p>
+        </aside>
+      </section>
+
+      <section class="scope" aria-labelledby="scope-title">
+        <h2 id="scope-title">What this first press handles</h2>
+        <p>
+          PDF input, margin trimming, one- or two-column reading order, graphical word wrapping,
+          fit-width, and fit-page output. Password-protected PDFs, OCR, selectable output text,
+          tables, and complex diagrams are not yet reconstructed semantically.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <span>Paprika runs on Rust and WebAssembly.</span>
+      <span>Local-only · no upload</span>
+    </footer>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

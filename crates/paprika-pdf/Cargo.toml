@@ -1,0 +1,16 @@
+[package]
+name = "paprika-pdf"
+description = "Pure-Rust PDF input and output for Paprika"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+hayro.workspace = true
+miniz_oxide.workspace = true
+paprika-core = { path = "../paprika-core" }
+pdf-writer.workspace = true
+thiserror.workspace = true

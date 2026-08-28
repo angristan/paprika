@@ -1,0 +1,8 @@
+/target/
+/web/dist/
+/web/pkg/
+/node_modules/
+.wrangler/
+.DS_Store
+*.pdf
+!tests/fixtures/*.pdf
