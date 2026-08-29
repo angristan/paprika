@@ -1,0 +1,17 @@
+[package]
+name = "paprika-epub"
+description = "Semantic PDF-to-EPUB conversion for Paprika"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+hayro.workspace = true
+image = { workspace = true, features = ["png"] }
+pdf_oxide.workspace = true
+pulldown-cmark.workspace = true
+rbook.workspace = true
+thiserror.workspace = true

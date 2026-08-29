@@ -15,4 +15,5 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 paprika-core = { path = "../paprika-core" }
+paprika-epub = { path = "../paprika-epub" }
 paprika-pdf = { path = "../paprika-pdf" }

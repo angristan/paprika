@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#f3ecdd" />
     <meta
       name="description"
-      content="Reflow PDF pages for an e-reader or phone. Conversion runs locally in your browser."
+      content="Convert PDFs to compact, reflowable EPUB books locally in your browser."
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
-    <title>Paprika — local PDF reflow</title>
+    <title>Paprika — local PDF to EPUB</title>
   </head>
   <body>
     <header class="masthead">
@@ -18,7 +18,7 @@
         <span class="mark" aria-hidden="true">P</span>
         <span>Paprika</span>
       </a>
-      <p>PDF reflow press · browser edition</p>
+      <p>PDF to EPUB press · browser edition</p>
     </header>
 
     <main>
@@ -26,8 +26,8 @@
         <p class="eyebrow">Small-screen typesetting</p>
         <h1 id="title">Make stubborn PDFs readable.</h1>
         <p>
-          Paprika trims paper margins, follows columns, and repacks graphical text for your
-          e-reader or phone. The document stays in this browser tab.
+          Paprika extracts selectable text, follows reading order, and makes a compact EPUB
+          for your e-reader or phone. The document stays in this browser tab.
         </p>
       </section>
 
@@ -50,48 +50,60 @@
           </div>
 
           <fieldset>
-            <legend>Composition</legend>
+            <legend>Output</legend>
             <label>
-              Mode
-              <select id="mode" name="mode">
-                <option value="reflow">Reflow text</option>
-                <option value="fit-width">Fit width</option>
-                <option value="fit-page">Fit page</option>
+              Format
+              <select id="format" name="format">
+                <option value="epub">Reflowable EPUB · recommended</option>
+                <option value="pdf">Raster PDF · experimental</option>
               </select>
             </label>
-            <label>
-              Device
-              <select id="preset" name="preset">
-                <option value="758x1024x167">Kindle 6″ · 758 × 1024</option>
-                <option value="1072x1448x300">Kindle Paperwhite · 1072 × 1448</option>
-                <option value="1080x1440x265">Kobo Libra · 1080 × 1440</option>
-                <option value="custom">Custom</option>
-              </select>
-            </label>
-            <div class="field-pair">
+            <p id="format-note" class="format-note">
+              Selectable text, reader-controlled type size, and compact output for born-digital PDFs.
+            </p>
+            <div id="raster-options" class="raster-options" hidden>
               <label>
-                Width <span>px</span>
-                <input id="width" name="width" type="number" min="128" max="8192" value="758" />
+                Raster layout
+                <select id="mode" name="mode">
+                  <option value="fit-width">Fit width</option>
+                  <option value="fit-page">Fit page</option>
+                  <option value="reflow">Graphical reflow · lossy</option>
+                </select>
               </label>
               <label>
-                Height <span>px</span>
-                <input id="height" name="height" type="number" min="128" max="8192" value="1024" />
+                Device
+                <select id="preset" name="preset">
+                  <option value="758x1024x167">Kindle 6″ · 758 × 1024</option>
+                  <option value="1072x1448x300">Kindle Paperwhite · 1072 × 1448</option>
+                  <option value="1080x1440x265">Kobo Libra · 1080 × 1440</option>
+                  <option value="custom">Custom</option>
+                </select>
               </label>
-            </div>
-            <div class="field-pair">
-              <label>
-                Margin <span>px</span>
-                <input id="margin" name="margin" type="number" min="0" max="512" value="24" />
-              </label>
-              <label>
-                Text size <span>pt</span>
-                <input id="font-size" name="fontSize" type="number" min="4" max="72" step="0.5" value="12" />
-              </label>
+              <div class="field-pair">
+                <label>
+                  Width <span>px</span>
+                  <input id="width" name="width" type="number" min="128" max="8192" value="758" />
+                </label>
+                <label>
+                  Height <span>px</span>
+                  <input id="height" name="height" type="number" min="128" max="8192" value="1024" />
+                </label>
+              </div>
+              <div class="field-pair">
+                <label>
+                  Margin <span>px</span>
+                  <input id="margin" name="margin" type="number" min="0" max="512" value="24" />
+                </label>
+                <label>
+                  Text size <span>pt</span>
+                  <input id="font-size" name="fontSize" type="number" min="4" max="72" step="0.5" value="12" />
+                </label>
+              </div>
             </div>
           </fieldset>
 
-          <details>
-            <summary>Source analysis</summary>
+          <details id="raster-analysis" hidden>
+            <summary>Raster source analysis</summary>
             <div class="advanced-fields">
               <label>
                 Output resolution <span>dpi</span>
@@ -116,20 +128,20 @@
           </details>
 
           <div class="actions">
-            <button id="convert" type="submit" disabled>Reflow PDF</button>
+            <button id="convert" type="submit" disabled>Make EPUB</button>
             <button id="cancel" class="quiet-button" type="button" hidden>Cancel</button>
           </div>
         </form>
 
         <aside class="proof" aria-labelledby="proof-title">
           <div class="proof-heading">
-            <h2 id="proof-title">Output sheet</h2>
-            <output id="dimensions">758 × 1024 px · 167 dpi</output>
+            <h2 id="proof-title">Output preview</h2>
+            <output id="dimensions">Reflowable EPUB · selectable text</output>
           </div>
           <div class="sheet-stage" aria-hidden="true">
             <div id="sheet" class="sheet">
               <span></span><span></span><span></span><span></span><span></span>
-              <i>reflow</i>
+              <i>EPUB</i>
             </div>
           </div>
           <div id="status" class="status" role="status" aria-live="polite">
@@ -137,7 +149,7 @@
             <p>Select a PDF to prepare a local conversion.</p>
             <progress id="progress" hidden></progress>
           </div>
-          <a id="download" class="download" href="#" download hidden>Download output PDF</a>
+          <a id="download" class="download" href="#" download hidden>Download output</a>
           <p class="privacy-note">
             <strong>Private by construction.</strong> There is no upload endpoint. Closing this tab
             clears the working document from browser memory.
@@ -146,11 +158,12 @@
       </section>
 
       <section class="scope" aria-labelledby="scope-title">
-        <h2 id="scope-title">What this first press handles</h2>
+        <h2 id="scope-title">What Paprika preserves</h2>
         <p>
-          PDF input, margin trimming, one- or two-column reading order, graphical word wrapping,
-          fit-width, and fit-page output. Password-protected PDFs, OCR, selectable output text,
-          tables, and complex diagrams are not yet reconstructed semantically.
+          Born-digital text stays selectable and reflows to your reader settings. Paprika detects
+          columns, headings, lists, tables, links, and embedded images. Equations, vector diagrams,
+          unusual layouts, and scanned pages can still need the experimental raster PDF fallback;
+          OCR is not included yet.
         </p>
       </section>
     </main>
