@@ -44,6 +44,8 @@ select {
 button,
 input,
 select {
+  min-width: 0;
+  max-width: 100%;
   font: inherit;
 }
 
