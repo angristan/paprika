@@ -297,10 +297,12 @@ h1 {
 }
 
 .drop-zone {
+  position: relative;
   display: grid;
   min-height: 94px;
   place-content: center;
   padding: 17px;
+  overflow: hidden;
   border: 1px dashed var(--border-strong);
   color: var(--ink);
   background: var(--surface);
