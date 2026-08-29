@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "paprika"
@@ -14,6 +18,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-paprika-core = { path = "../paprika-core" }
-paprika-epub = { path = "../paprika-epub" }
-paprika-pdf = { path = "../paprika-pdf" }
+paprika-core = { version = "0.1.0", path = "../paprika-core" }
+paprika-epub = { version = "0.1.0", path = "../paprika-epub" }
+paprika-pdf = { version = "0.1.0", path = "../paprika-pdf" }

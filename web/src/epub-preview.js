@@ -1,7 +1,13 @@
 const PREVIEW_ORIGIN = "https://preview.invalid/OEBPS/";
+const ALLOWED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const MAX_STYLESHEET_BYTES = 512 * 1024;
+const MAX_CHAPTER_BYTES = 2 * 1024 * 1024;
 
 export class EpubPreview {
   constructor(frame) {
+    if (!(frame instanceof HTMLIFrameElement)) {
+      throw new TypeError("EPUB preview requires an iframe.");
+    }
     this.frame = frame;
     this.manifest = null;
     this.assetBuffers = [];
@@ -20,35 +26,53 @@ export class EpubPreview {
   }
 
   setData(manifest, assetBuffers) {
+    validateManifest(manifest, assetBuffers);
     this.clear();
     this.manifest = manifest;
     this.assetBuffers = assetBuffers;
     this.stylesheetUrl = URL.createObjectURL(
       new Blob([manifest.stylesheet], { type: "text/css" }),
     );
-    return this.show(0);
   }
 
   show(index) {
-    if (!this.manifest || index < 0 || index >= this.pageCount) return null;
+    if (!this.manifest || !Number.isInteger(index) || index < 0 || index >= this.pageCount) {
+      return null;
+    }
     this.releasePageUrls();
     this.chapterIndex = index;
     const chapter = this.manifest.chapters[index];
     const parser = new DOMParser();
     const document = parser.parseFromString(chapter.xhtml, "application/xhtml+xml");
-    if (document.querySelector("parsererror")) {
+    if (document.querySelector("parsererror") || document.documentElement.localName !== "html") {
       throw new Error("The generated EPUB preview chapter is not valid XHTML.");
     }
 
-    document.querySelectorAll("script, iframe, object, embed, base, style, link").forEach((node) => node.remove());
+    document
+      .querySelectorAll(
+        "script, iframe, object, embed, base, style, link, form, input, button, textarea, select, option, video, audio, source, track, canvas, meta[http-equiv]",
+      )
+      .forEach((node) => node.remove());
     for (const element of document.querySelectorAll("*")) {
       for (const attribute of [...element.attributes]) {
-        if (attribute.name.toLowerCase().startsWith("on")) element.removeAttribute(attribute.name);
+        const name = attribute.name.toLowerCase();
+        if (
+          name.startsWith("on")
+          || name === "style"
+          || name === "srcdoc"
+          || name === "formaction"
+          || name === "action"
+          || name === "poster"
+          || name === "xlink:href"
+        ) {
+          element.removeAttribute(attribute.name);
+        }
       }
     }
     document.querySelectorAll("a").forEach((link) => {
-      link.removeAttribute("href");
-      link.removeAttribute("target");
+      for (const name of ["href", "target", "download", "ping", "rel"]) {
+        link.removeAttribute(name);
+      }
     });
 
     const assets = new Map(this.manifest.assets.map((asset) => [asset.href, asset]));
@@ -56,8 +80,9 @@ export class EpubPreview {
       const href = resolveEpubPath(chapter.href, image.getAttribute("src") ?? "");
       const asset = assets.get(href);
       const buffer = asset ? this.assetBuffers[asset.index] : null;
-      if (!asset || !buffer) {
+      if (!asset || !(buffer instanceof ArrayBuffer) || !ALLOWED_IMAGE_TYPES.has(asset.media_type)) {
         image.removeAttribute("src");
+        image.removeAttribute("srcset");
         return;
       }
       const url = URL.createObjectURL(new Blob([buffer], { type: asset.media_type }));
@@ -85,7 +110,7 @@ export class EpubPreview {
       new Blob([serialized], { type: "application/xhtml+xml" }),
     );
     this.frame.title = `Generated EPUB preview — ${chapter.title}, source page ${chapter.source_page}`;
-    this.frame.removeAttribute("src");
+    this.frame.src = "about:blank";
     this.frame.setAttribute("sandbox", "allow-same-origin");
     this.frame.src = this.documentUrl;
     return chapter;
@@ -108,12 +133,58 @@ export class EpubPreview {
   }
 }
 
+function validateManifest(manifest, assetBuffers) {
+  if (!manifest || typeof manifest !== "object") {
+    throw new TypeError("The EPUB preview manifest is missing.");
+  }
+  if (typeof manifest.stylesheet !== "string" || manifest.stylesheet.length > MAX_STYLESHEET_BYTES) {
+    throw new TypeError("The EPUB preview stylesheet is invalid.");
+  }
+  if (!Array.isArray(manifest.chapters) || !Array.isArray(manifest.assets)) {
+    throw new TypeError("The EPUB preview manifest is incomplete.");
+  }
+  if (!Array.isArray(assetBuffers)) {
+    throw new TypeError("The EPUB preview assets are missing.");
+  }
+
+  for (const chapter of manifest.chapters) {
+    if (
+      !chapter
+      || typeof chapter.href !== "string"
+      || typeof chapter.title !== "string"
+      || typeof chapter.xhtml !== "string"
+      || chapter.xhtml.length > MAX_CHAPTER_BYTES
+      || !Number.isSafeInteger(chapter.source_page)
+      || chapter.source_page < 1
+      || !resolveEpubPath("text/placeholder.xhtml", chapter.href)
+    ) {
+      throw new TypeError("An EPUB preview chapter is invalid.");
+    }
+  }
+
+  for (const asset of manifest.assets) {
+    if (
+      !asset
+      || typeof asset.href !== "string"
+      || !Number.isSafeInteger(asset.index)
+      || asset.index < 0
+      || asset.index >= assetBuffers.length
+      || typeof asset.media_type !== "string"
+      || !resolveEpubPath("text/placeholder.xhtml", asset.href)
+      || !(assetBuffers[asset.index] instanceof ArrayBuffer)
+    ) {
+      throw new TypeError("An EPUB preview asset is invalid.");
+    }
+  }
+}
+
 function resolveEpubPath(chapterHref, resourceHref) {
   try {
     const chapter = new URL(chapterHref, PREVIEW_ORIGIN);
     const resource = new URL(resourceHref, chapter);
     if (resource.origin !== new URL(PREVIEW_ORIGIN).origin) return "";
-    return resource.pathname.replace(/^\/OEBPS\//, "");
+    const path = resource.pathname.replace(/^\/OEBPS\//, "");
+    return path && !path.startsWith("/") ? decodeURIComponent(path) : "";
   } catch {
     return "";
   }

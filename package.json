@@ -7,11 +7,20 @@
     "build": "bash scripts/build-web.sh",
     "build:cloudflare": "bash scripts/build-web-cloudflare.sh",
     "dev": "bun run build && wrangler dev",
-    "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-    "check": "bun run check:rust && bun run build && wrangler deploy --dry-run",
-    "deploy": "bun run check && wrangler deploy"
+    "check:rust": "cargo fmt --all -- --check && cargo clippy --locked --workspace --all-targets -- -D warnings && cargo test --locked --workspace",
+    "check:wasm": "cargo check --locked --package paprika-wasm --target wasm32-unknown-unknown",
+    "check:js": "bash scripts/check-js.sh",
+    "check:epub": "bash scripts/check-epub.sh",
+    "check:fuzz": "cargo check --locked --manifest-path fuzz/Cargo.toml --bins",
+    "check:dist": "bash scripts/check-dist.sh",
+    "check": "bun run check:rust && bun run check:wasm && bun run check:js && bun run check:fuzz",
+    "predeploy": "bun run check && bun run check:epub && bun run build && bun run check:dist && bun run wrangler deploy --dry-run",
+    "test:e2e": "bash scripts/run-browser-e2e.sh",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
     "wrangler": "4.127.1"
   }
 }

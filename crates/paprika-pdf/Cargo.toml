@@ -6,11 +6,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 bytemuck.workspace = true
 hayro.workspace = true
 miniz_oxide.workspace = true
-paprika-core = { path = "../paprika-core" }
+paprika-core = { version = "0.1.0", path = "../paprika-core" }
 pdf-writer.workspace = true
 thiserror.workspace = true

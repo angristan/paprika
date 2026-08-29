@@ -1,6 +1,6 @@
 use paprika_core::OptimizationOptions;
 use paprika_epub::{
-    EpubOptions, EpubPreview, EpubPreviewLimits, convert_pdf_to_epub as convert_epub,
+    EpubOptions, EpubPreview, EpubPreviewLimits, convert_pdf_to_epub_owned, normalize_language_tag,
 };
 use wasm_bindgen::prelude::*;
 
@@ -142,12 +142,18 @@ impl BrowserEpubConversion {
 
 /// Convert a born-digital PDF to EPUB plus a bounded browser preview.
 #[wasm_bindgen]
-pub fn convert_pdf_to_epub(input: &[u8], title: String) -> Result<BrowserEpubConversion, JsValue> {
-    enforce_input_limit(input)?;
-    let result = convert_epub(
+pub fn convert_pdf_to_epub(
+    input: Vec<u8>,
+    title: String,
+    language: String,
+) -> Result<BrowserEpubConversion, JsValue> {
+    enforce_input_limit(&input)?;
+    let language = browser_language(&language)?;
+    let result = convert_pdf_to_epub_owned(
         input,
         EpubOptions {
             title,
+            language,
             max_pages: MAX_BROWSER_PAGES,
             // Keep browser output bounded even when a PDF contains many large
             // image XObjects. The native CLI has a larger default allowance.
@@ -174,16 +180,54 @@ pub fn convert_pdf_to_epub(input: &[u8], title: String) -> Result<BrowserEpubCon
     })
 }
 
+/// Browser-owned raster result. The conversion reports its source page count
+/// without reparsing the input in JavaScript before the real conversion.
+#[wasm_bindgen]
+pub struct BrowserPdfConversion {
+    output: Option<Vec<u8>>,
+    source_pages: usize,
+    output_pages: usize,
+}
+
+#[wasm_bindgen]
+impl BrowserPdfConversion {
+    #[wasm_bindgen(getter)]
+    pub fn source_pages(&self) -> usize {
+        self.source_pages
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn output_pages(&self) -> usize {
+        self.output_pages
+    }
+
+    pub fn take_output(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.output
+            .take()
+            .ok_or_else(|| JsValue::from_str("PDF output was already transferred"))
+    }
+}
+
 /// Produce the legacy raster PDF fallback in memory.
 #[wasm_bindgen]
-pub fn optimize_pdf_bytes(input: &[u8], options: JsValue) -> Result<Vec<u8>, JsValue> {
-    enforce_input_limit(input)?;
+pub fn optimize_pdf_bytes(
+    input: Vec<u8>,
+    options: JsValue,
+) -> Result<BrowserPdfConversion, JsValue> {
+    enforce_input_limit(&input)?;
     let options: OptimizationOptions = serde_wasm_bindgen::from_value(options).map_err(js_error)?;
     options.validate().map_err(js_error)?;
-    let result =
-        paprika_pdf::optimize_pdf_with_limits(input, options, paprika_pdf::PdfLimits::browser())
-            .map_err(js_error)?;
-    Ok(result.bytes)
+    let result = paprika_pdf::optimize_pdf_with_limits_owned(
+        input,
+        options,
+        paprika_pdf::PdfLimits::browser(),
+    )
+    .map_err(js_error)?;
+    Ok(BrowserPdfConversion {
+        output: Some(result.bytes),
+        source_pages: result.source_pages,
+        output_pages: result.output_pages,
+    })
 }
 
 fn enforce_input_limit(input: &[u8]) -> Result<(), JsValue> {
@@ -193,6 +237,12 @@ fn enforce_input_limit(input: &[u8]) -> Result<(), JsValue> {
         ));
     }
     Ok(())
+}
+
+fn browser_language(language: &str) -> Result<String, JsValue> {
+    normalize_language_tag(language).ok_or_else(|| {
+        JsValue::from_str("Enter a valid BCP 47 language tag, such as en, fr, or pt-BR.")
+    })
 }
 
 fn js_error(error: impl std::fmt::Display) -> JsValue {
