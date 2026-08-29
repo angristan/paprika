@@ -13,10 +13,19 @@ mkdir -p web/dist
 cp web/src/index.html web/src/styles.css web/src/app.js web/src/converter.worker.js \
   web/src/favicon.svg web/src/_headers web/src/404.html web/dist/
 
+# Rust already optimizes this release for size. wasm-opt saves about 15% more
+# bytes but adds roughly six minutes on this module, so Cloudflare builds skip
+# it by default. Set PAPRIKA_WASM_OPT=1 for an explicitly size-minimized build.
+wasm_opt_args=(--no-opt)
+if [[ "${PAPRIKA_WASM_OPT:-0}" == "1" ]]; then
+  wasm_opt_args=()
+fi
+
 RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+simd128" \
   wasm-pack build crates/paprika-wasm \
   --target web \
   --release \
+  "${wasm_opt_args[@]}" \
   --out-dir "$root/web/dist/pkg" \
   --out-name paprika_wasm
 

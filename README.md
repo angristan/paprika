@@ -12,14 +12,14 @@ The same Rust pipeline runs in the native CLI and browser WebAssembly app. An ex
 
 - Reflowable EPUB 3 output with selectable text
 - Column-aware reading order for born-digital PDFs
-- Headings, lists, links, basic tables, Unicode math text, embedded images, and captioned vector-figure crops
+- Headings, lists, links, basic tables, Unicode inline math, embedded images, captioned vector-figure crops, and conservative display-equation crops
 - One source-page chapter per EPUB spine entry for traceability
 - Native CLI on Linux, macOS, and Windows
 - Browser conversion in a cancellable Web Worker
 - Static Cloudflare deployment with no upload endpoint
 - Experimental raster `fit-width`, `fit-page`, and graphical `reflow` PDF output
 
-Semantic PDF extraction is inherently heuristic. Complex equations, uncaptioned vector graphics, unusual layouts, and reading order can require manual review. Paprika does not run OCR; scanned pages are reported and preserved only when their raster image can be extracted. Password-protected PDFs are not supported.
+Semantic PDF extraction is inherently heuristic. Paprika preserves confidently detected display equations as local image crops and keeps simpler inline math as Unicode text; it does not reconstruct LaTeX or MathML. Uncaptioned vector graphics, unusual layouts, and reading order can require manual review. Paprika does not run OCR; scanned pages are reported and preserved only when their raster image can be extracted. Password-protected PDFs are not supported.
 
 ## CLI
 
@@ -71,7 +71,7 @@ Cloudflare Workers Builds watches `main`:
 - Build: `bun run build:cloudflare`
 - Deploy: `bun run wrangler deploy`
 
-The build bootstrap installs pinned Rust and wasm-pack versions and verifies the wasm-pack archive checksum.
+The build bootstrap installs pinned Rust and wasm-pack versions and verifies the wasm-pack archive checksum. Release builds use Rust's size optimization but skip the costly final `wasm-opt` pass; set `PAPRIKA_WASM_OPT=1` only when the smallest possible bundle is worth the extra build time.
 
 ## Architecture
 

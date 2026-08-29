@@ -12,10 +12,11 @@ use hayro::{RenderCache, RenderSettings};
 use pdf_oxide::PdfDocument;
 use pdf_oxide::converters::{ConversionOptions, ReadingOrderMode};
 use pdf_oxide::geometry::Rect;
-use pdf_oxide::layout::RectFilterMode;
+use pdf_oxide::layout::{RectFilterMode, TextSpan};
 use pulldown_cmark::{CowStr, Event, Options as MarkdownOptions, Parser, Tag, TagEnd, html};
 use rbook::Epub;
 use rbook::epub::EpubChapter;
+use std::io::{Cursor, Seek, SeekFrom, Write};
 use thiserror::Error;
 
 const DEFAULT_LANGUAGE: &str = "en";
@@ -150,7 +151,14 @@ struct PageImage {
     href: String,
     bytes: Vec<u8>,
     alt: String,
-    placement_hint: Option<String>,
+    placement: ImagePlacement,
+}
+
+#[derive(Debug)]
+enum ImagePlacement {
+    Caption(String),
+    EquationAnchor(String),
+    EndOfPage,
 }
 
 #[derive(Debug, Default)]
@@ -158,6 +166,96 @@ struct FigureCrops {
     images: Vec<PageImage>,
     regions: Vec<Rect>,
     text_exclusions: Vec<Rect>,
+}
+
+#[derive(Debug, Default)]
+struct EquationCrops {
+    images: Vec<PageImage>,
+    text_exclusions: Vec<Rect>,
+    asset_bytes: usize,
+}
+
+#[derive(Clone, Debug)]
+struct EquationPlan {
+    render_bbox: Rect,
+    exclusion_rects: Vec<Rect>,
+    anchor: String,
+}
+
+#[derive(Clone, Debug)]
+struct SpanComponent {
+    indices: Vec<usize>,
+    bbox: Rect,
+}
+
+struct BoundedBuffer {
+    inner: Cursor<Vec<u8>>,
+    limit: usize,
+    limit_exceeded: bool,
+}
+
+impl BoundedBuffer {
+    fn new(limit: usize) -> Self {
+        Self {
+            inner: Cursor::new(Vec::new()),
+            limit,
+            limit_exceeded: false,
+        }
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.inner.into_inner()
+    }
+}
+
+impl Write for BoundedBuffer {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let end = self.inner.position().saturating_add(buffer.len() as u64);
+        if end > self.limit as u64 {
+            self.limit_exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                "encoded image exceeds its memory budget",
+            ));
+        }
+        self.inner.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Seek for BoundedBuffer {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        let next = match position {
+            SeekFrom::Start(offset) => Some(offset),
+            SeekFrom::End(offset) => add_signed_offset(self.inner.get_ref().len() as u64, offset),
+            SeekFrom::Current(offset) => add_signed_offset(self.inner.position(), offset),
+        };
+        let Some(next) = next else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid seek before start of image buffer",
+            ));
+        };
+        if next > self.limit as u64 {
+            self.limit_exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                "encoded image exceeds its memory budget",
+            ));
+        }
+        self.inner.seek(SeekFrom::Start(next))
+    }
+}
+
+fn add_signed_offset(base: u64, offset: i64) -> Option<u64> {
+    if offset >= 0 {
+        base.checked_add(offset as u64)
+    } else {
+        base.checked_sub(offset.unsigned_abs())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -211,7 +309,7 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
     } else {
         if options.include_images && input.len() > MAX_FIGURE_RENDER_INPUT_BYTES {
             warnings.push(
-                "Captioned vector-figure crops were skipped because the source exceeds 32 MiB."
+                "Figure and equation crops were skipped because the source exceeds 32 MiB."
                     .to_string(),
             );
         }
@@ -241,23 +339,54 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
         } else {
             FigureCrops::default()
         };
+        let mut equations = if options.include_images {
+            render_document
+                .as_ref()
+                .map(|source| {
+                    collect_equation_crops(
+                        source,
+                        &document,
+                        page_index,
+                        &crops.regions,
+                        asset_bytes,
+                        options.max_asset_bytes,
+                        &mut warnings,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            EquationCrops::default()
+        };
         let mut page_extraction_options = extraction_options.clone();
         page_extraction_options.exclude_regions = crops.text_exclusions.clone();
+        page_extraction_options
+            .exclude_regions
+            .extend(equations.text_exclusions.iter().copied());
         page_extraction_options.exclude_regions_mode = RectFilterMode::MinOverlap(0.5);
-        let markdown = document
-            .to_markdown(page_index, &page_extraction_options)
-            .map_err(|error| EpubError::Extract {
-                page: page_index + 1,
-                message: error.to_string(),
-            })?;
+        let (mut markdown, mut html) =
+            extract_page_xhtml(&document, page_index, &page_extraction_options)?;
+        if !equation_anchors_are_unique(&html, &equations.images) {
+            warnings.push(format!(
+                "Display equations from page {} remained as text because their reading position was ambiguous.",
+                page_index + 1
+            ));
+            equations = EquationCrops::default();
+            page_extraction_options.exclude_regions = crops.text_exclusions.clone();
+            (markdown, html) = extract_page_xhtml(&document, page_index, &page_extraction_options)?;
+        }
         let remaining_semantic_bytes = options.max_semantic_bytes.saturating_sub(semantic_bytes);
         if markdown.len() > remaining_semantic_bytes {
             return Err(EpubError::SemanticTooLarge {
                 limit: options.max_semantic_bytes / (1024 * 1024),
             });
         }
-        let mut html = markdown_to_xhtml(&markdown);
-        strip_invalid_xml_characters(&mut html);
+        asset_bytes =
+            asset_bytes
+                .checked_add(equations.asset_bytes)
+                .ok_or(EpubError::AssetsTooLarge {
+                    limit: options.max_asset_bytes / (1024 * 1024),
+                })?;
         let has_text = visible_text_len(&html) >= 20;
         if has_text {
             text_pages += 1;
@@ -289,6 +418,7 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
                 regions,
                 ..
             } = crops;
+            images.extend(equations.images);
             images.extend(collect_page_images(
                 &document,
                 page_index,
@@ -464,10 +594,16 @@ fn collect_figure_crops(
         }
 
         let crop = image::imageops::crop_imm(&rendered, x, y, crop_width, crop_height).to_image();
-        let mut cursor = std::io::Cursor::new(Vec::new());
+        let remaining_bytes = max_bytes.saturating_sub(*total_bytes);
+        let mut output = BoundedBuffer::new(remaining_bytes);
         if let Err(error) =
-            image::DynamicImage::ImageRgba8(crop).write_to(&mut cursor, image::ImageFormat::Png)
+            image::DynamicImage::ImageRgba8(crop).write_to(&mut output, image::ImageFormat::Png)
         {
+            if output.limit_exceeded {
+                return Err(EpubError::AssetsTooLarge {
+                    limit: max_bytes / (1024 * 1024),
+                });
+            }
             warnings.push(format!(
                 "Could not encode figure {} from page {}: {error}",
                 caption_index + 1,
@@ -475,7 +611,7 @@ fn collect_figure_crops(
             ));
             continue;
         }
-        let bytes = cursor.into_inner();
+        let bytes = output.into_inner();
         account_asset(total_bytes, bytes.len(), max_bytes)?;
         regions.push(coarse_region);
         if let Some(region) = semantic_region {
@@ -489,10 +625,12 @@ fn collect_figure_crops(
             ),
             bytes,
             alt: caption.text.clone(),
-            placement_hint: caption
+            placement: caption
                 .text
                 .split_once(':')
-                .map(|(label, _)| format!("{}:", label.trim())),
+                .map_or(ImagePlacement::EndOfPage, |(label, _)| {
+                    ImagePlacement::Caption(format!("{}:", label.trim()))
+                }),
         });
     }
     Ok(FigureCrops {
@@ -500,6 +638,704 @@ fn collect_figure_crops(
         regions,
         text_exclusions,
     })
+}
+
+fn collect_equation_crops(
+    source: &SourcePdf,
+    document: &PdfDocument,
+    page_index: usize,
+    excluded_regions: &[Rect],
+    existing_asset_bytes: usize,
+    max_asset_bytes: usize,
+    warnings: &mut Vec<String>,
+) -> Result<EquationCrops, EpubError> {
+    if document.get_page_rotation(page_index).unwrap_or(0) != 0 {
+        return Ok(EquationCrops::default());
+    }
+    let Some(page) = source.pages().get(page_index) else {
+        return Ok(EquationCrops::default());
+    };
+    let crop_box = page.intersected_crop_box();
+    let page_bounds = Rect::new(
+        crop_box.x0 as f32,
+        crop_box.y0 as f32,
+        (crop_box.x1 - crop_box.x0) as f32,
+        (crop_box.y1 - crop_box.y0) as f32,
+    );
+    if page_bounds.width <= 0.0 || page_bounds.height <= 0.0 {
+        return Ok(EquationCrops::default());
+    }
+
+    let spans = match document.extract_spans(page_index) {
+        Ok(spans) => spans,
+        Err(error) => {
+            warnings.push(format!(
+                "Could not inspect equations from page {}: {error}",
+                page_index + 1
+            ));
+            return Ok(EquationCrops::default());
+        }
+    };
+    let table_regions: Vec<Rect> = document
+        .extract_tables(page_index)
+        .map(|tables| tables.into_iter().filter_map(|table| table.bbox).collect())
+        .unwrap_or_default();
+    let image_regions: Vec<Rect> = document
+        .page_image_handles(page_index)
+        .map(|images| images.into_iter().map(|image| image.bbox).collect())
+        .unwrap_or_default();
+    let mut veto_regions =
+        Vec::with_capacity(excluded_regions.len() + table_regions.len() + image_regions.len());
+    veto_regions.extend_from_slice(excluded_regions);
+    veto_regions.extend(table_regions);
+    veto_regions.extend(image_regions);
+    let plans = find_display_equations(&spans, page_bounds, &veto_regions);
+    if plans.is_empty() {
+        return Ok(EquationCrops::default());
+    }
+
+    let (base_width, base_height) = page.render_dimensions();
+    let width = (base_width * FIGURE_RENDER_SCALE).ceil().max(1.0) as u32;
+    let height = (base_height * FIGURE_RENDER_SCALE).ceil().max(1.0) as u32;
+    if width > MAX_FIGURE_RENDER_EDGE
+        || height > MAX_FIGURE_RENDER_EDGE
+        || u64::from(width) * u64::from(height) > MAX_FIGURE_RENDER_PIXELS
+        || width > u16::MAX as u32
+        || height > u16::MAX as u32
+    {
+        warnings.push(format!(
+            "Equation crops from page {} exceed the render memory limit and were skipped.",
+            page_index + 1
+        ));
+        return Ok(EquationCrops::default());
+    }
+    let pixmap = hayro::render(
+        page,
+        &RenderCache::new(),
+        &InterpreterSettings::default(),
+        &RenderSettings {
+            x_scale: FIGURE_RENDER_SCALE,
+            y_scale: FIGURE_RENDER_SCALE,
+            width: Some(width as u16),
+            height: Some(height as u16),
+            bg_color: WHITE,
+        },
+    );
+    let rgba: Vec<u8> = bytemuck::cast_vec(pixmap.take_unpremultiplied());
+    let Some(rendered) = image::RgbaImage::from_raw(width, height, rgba) else {
+        warnings.push(format!(
+            "Could not render equation fallback for page {}.",
+            page_index + 1
+        ));
+        return Ok(EquationCrops::default());
+    };
+
+    let x_scale = width as f32 / page_bounds.width;
+    let y_scale = height as f32 / page_bounds.height;
+    let mut images = Vec::with_capacity(plans.len());
+    let mut text_exclusions = Vec::new();
+    let mut cumulative_asset_bytes = existing_asset_bytes;
+    let mut equation_asset_bytes = 0usize;
+    for (index, plan) in plans.into_iter().enumerate() {
+        let x = ((plan.render_bbox.x - page_bounds.x) * x_scale)
+            .floor()
+            .max(0.0) as u32;
+        let y =
+            ((page_bounds.y + page_bounds.height - plan.render_bbox.y - plan.render_bbox.height)
+                * y_scale)
+                .floor()
+                .max(0.0) as u32;
+        let crop_width = (plan.render_bbox.width * x_scale)
+            .ceil()
+            .min(width.saturating_sub(x) as f32) as u32;
+        let crop_height = (plan.render_bbox.height * y_scale)
+            .ceil()
+            .min(height.saturating_sub(y) as f32) as u32;
+        if crop_width < 32 || crop_height < 16 {
+            continue;
+        }
+
+        let crop = image::imageops::crop_imm(&rendered, x, y, crop_width, crop_height).to_image();
+        let remaining_bytes = max_asset_bytes.saturating_sub(cumulative_asset_bytes);
+        let mut output = BoundedBuffer::new(remaining_bytes);
+        if let Err(error) =
+            image::DynamicImage::ImageRgba8(crop).write_to(&mut output, image::ImageFormat::Png)
+        {
+            if output.limit_exceeded {
+                return Err(EpubError::AssetsTooLarge {
+                    limit: max_asset_bytes / (1024 * 1024),
+                });
+            }
+            warnings.push(format!(
+                "Could not encode equation {} from page {}: {error}",
+                index + 1,
+                page_index + 1
+            ));
+            continue;
+        }
+        let bytes = output.into_inner();
+        account_asset(&mut cumulative_asset_bytes, bytes.len(), max_asset_bytes)?;
+        equation_asset_bytes =
+            equation_asset_bytes
+                .checked_add(bytes.len())
+                .ok_or(EpubError::AssetsTooLarge {
+                    limit: max_asset_bytes / (1024 * 1024),
+                })?;
+        text_exclusions.extend(plan.exclusion_rects);
+        images.push(PageImage {
+            href: format!(
+                "images/page-{:04}-equation-{:02}.png",
+                page_index + 1,
+                index + 1
+            ),
+            bytes,
+            alt: if is_equation_number(&plan.anchor) {
+                format!(
+                    "Display equation {} from source page {}",
+                    plan.anchor,
+                    page_index + 1
+                )
+            } else {
+                format!("Display equation from source page {}", page_index + 1)
+            },
+            placement: ImagePlacement::EquationAnchor(plan.anchor),
+        });
+    }
+
+    Ok(EquationCrops {
+        images,
+        text_exclusions,
+        asset_bytes: equation_asset_bytes,
+    })
+}
+
+fn find_display_equations(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    veto_regions: &[Rect],
+) -> Vec<EquationPlan> {
+    let mut plans = find_numbered_equations(spans, page_bounds, veto_regions);
+    plans.extend(find_unnumbered_equations(
+        spans,
+        page_bounds,
+        veto_regions,
+        &plans,
+    ));
+    plans.sort_by(|left, right| right.render_bbox.y.total_cmp(&left.render_bbox.y));
+    plans
+}
+
+fn find_numbered_equations(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    veto_regions: &[Rect],
+) -> Vec<EquationPlan> {
+    let body_font_size = median_body_font_size(spans);
+    let two_columns = page_has_two_text_columns(spans, page_bounds);
+    let page_midpoint = page_bounds.x + page_bounds.width * 0.5;
+    let equation_numbers: Vec<&TextSpan> = spans
+        .iter()
+        .filter(|span| is_equation_number(&span.text))
+        .collect();
+    let mut plans = Vec::new();
+
+    for number in &equation_numbers {
+        let number_center = number.bbox.x + number.bbox.width * 0.5;
+        let (column_left, column_right) = if two_columns {
+            if number_center < page_midpoint {
+                (page_bounds.x, page_midpoint)
+            } else {
+                (page_midpoint, page_bounds.x + page_bounds.width)
+            }
+        } else {
+            (page_bounds.x, page_bounds.x + page_bounds.width)
+        };
+        let column_width = column_right - column_left;
+        if number_center < column_left + column_width * 0.78
+            || overlaps_any(number.bbox, veto_regions)
+        {
+            continue;
+        }
+
+        let number_center_y = number.bbox.y + number.bbox.height * 0.5;
+        let vertical_radius = body_font_size * 1.6;
+        let formula_spans: Vec<&TextSpan> = spans
+            .iter()
+            .filter(|span| !std::ptr::eq(*span, *number))
+            .filter(|span| {
+                let center_x = span.bbox.x + span.bbox.width * 0.5;
+                let center_y = span.bbox.y + span.bbox.height * 0.5;
+                let distance = (center_y - number_center_y).abs();
+                let belongs_to_this_number = !equation_numbers.iter().any(|other| {
+                    if std::ptr::eq(*other, *number) {
+                        return false;
+                    }
+                    let other_center_x = other.bbox.x + other.bbox.width * 0.5;
+                    let other_center_y = other.bbox.y + other.bbox.height * 0.5;
+                    other_center_x >= column_left + column_width * 0.78
+                        && other_center_x <= column_right
+                        && (center_y - other_center_y).abs() < distance
+                });
+                center_x >= column_left
+                    && center_x < number.bbox.x - body_font_size * 0.4
+                    && distance <= vertical_radius
+                    && belongs_to_this_number
+                    && !overlaps_any(span.bbox, veto_regions)
+            })
+            .collect();
+        if formula_spans.len() < 2
+            || formula_spans.iter().any(|span| is_mixed_prose_span(span))
+            || !formula_spans.iter().any(|span| is_math_span(span))
+            || !formula_spans
+                .iter()
+                .any(|span| contains_relation_operator(&span.text))
+        {
+            continue;
+        }
+
+        let formula_bbox = formula_spans
+            .iter()
+            .skip(1)
+            .fold(formula_spans[0].bbox, |bbox, span| {
+                union_rect(bbox, span.bbox)
+            });
+        if formula_bbox.width < body_font_size * 4.0 || formula_bbox.height < body_font_size * 0.7 {
+            continue;
+        }
+        let render_bbox = intersect_rect(
+            expand_rect(union_rect(formula_bbox, number.bbox), 3.0),
+            page_bounds,
+        )
+        .unwrap_or_else(|| union_rect(formula_bbox, number.bbox));
+        plans.push(EquationPlan {
+            render_bbox,
+            exclusion_rects: formula_spans
+                .into_iter()
+                .map(|span| expand_rect(span.bbox, 0.5))
+                .collect(),
+            anchor: number.text.trim().to_string(),
+        });
+    }
+
+    plans
+}
+
+fn find_unnumbered_equations(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    veto_regions: &[Rect],
+    numbered: &[EquationPlan],
+) -> Vec<EquationPlan> {
+    if spans.iter().any(|span| {
+        let text = span.text.trim_start();
+        text.starts_with("Algorithm ") || text.starts_with("Listing ")
+    }) {
+        return Vec::new();
+    }
+
+    let body_font_size = median_body_font_size(spans);
+    let two_columns = page_has_two_text_columns(spans, page_bounds);
+    let components = horizontal_span_components(spans, body_font_size);
+    let formula_components: Vec<&SpanComponent> = components
+        .iter()
+        .filter(|component| {
+            is_display_formula_component(component, spans, page_bounds, two_columns, veto_regions)
+                && !numbered
+                    .iter()
+                    .any(|plan| overlap_fraction(component.bbox, plan.render_bbox) >= 0.25)
+        })
+        .collect();
+    let mut consumed = vec![false; formula_components.len()];
+    let mut plans = Vec::new();
+
+    for (index, primary) in formula_components.iter().enumerate() {
+        if consumed[index] {
+            continue;
+        }
+        let (column_left, column_right) =
+            local_column_bounds(primary.bbox, page_bounds, two_columns);
+        let mut members = vec![index];
+        for (other_index, other) in formula_components.iter().enumerate().skip(index + 1) {
+            if consumed[other_index] {
+                continue;
+            }
+            let same_column =
+                other.bbox.x + other.bbox.width > column_left && other.bbox.x < column_right;
+            let vertical_gap = rect_vertical_gap(primary.bbox, other.bbox);
+            if same_column && vertical_gap <= body_font_size * 1.1 {
+                members.push(other_index);
+            }
+        }
+
+        let mut span_indices = Vec::new();
+        let mut render_bbox = primary.bbox;
+        for member in &members {
+            consumed[*member] = true;
+            let component = formula_components[*member];
+            render_bbox = union_rect(render_bbox, component.bbox);
+            span_indices.extend(component.indices.iter().copied());
+        }
+        let attachment_region = expand_rect(render_bbox, body_font_size * 0.6);
+        for (span_index, span) in spans.iter().enumerate() {
+            let center_x = span.bbox.x + span.bbox.width * 0.5;
+            if center_x >= column_left
+                && center_x <= column_right
+                && (is_math_span(span) || span.font_size <= body_font_size * 0.82)
+                && !is_mixed_prose_span(span)
+                && rects_intersect(span.bbox, attachment_region)
+            {
+                render_bbox = union_rect(render_bbox, span.bbox);
+                span_indices.push(span_index);
+            }
+        }
+        span_indices.sort_unstable();
+        span_indices.dedup();
+        if !is_vertically_isolated(
+            render_bbox,
+            &span_indices,
+            spans,
+            column_left,
+            column_right,
+            body_font_size,
+        ) {
+            continue;
+        }
+
+        let Some(anchor_index) = span_indices.iter().copied().find(|span_index| {
+            let text = spans[*span_index].text.trim();
+            text.len() >= 3
+                && text.chars().any(char::is_alphabetic)
+                && !contains_relation_operator(text)
+        }) else {
+            continue;
+        };
+        let anchor = spans[anchor_index].text.trim().to_string();
+        if anchor.split_whitespace().count() > 2 {
+            continue;
+        }
+        let exclusion_rects = span_indices
+            .into_iter()
+            .filter(|span_index| *span_index != anchor_index)
+            .map(|span_index| expand_rect(spans[span_index].bbox, 0.5))
+            .collect();
+        let render_bbox =
+            intersect_rect(expand_rect(render_bbox, 3.0), page_bounds).unwrap_or(render_bbox);
+        plans.push(EquationPlan {
+            render_bbox,
+            exclusion_rects,
+            anchor,
+        });
+    }
+
+    plans
+}
+
+fn horizontal_span_components(spans: &[TextSpan], body_font_size: f32) -> Vec<SpanComponent> {
+    let mut ordered: Vec<usize> = (0..spans.len())
+        .filter(|index| {
+            let span = &spans[*index];
+            !span.text.trim().is_empty()
+                && span.rotation_degrees.abs() < 1.0
+                && span.artifact_type.is_none()
+        })
+        .collect();
+    ordered.sort_by(|left, right| {
+        spans[*right]
+            .bbox
+            .y
+            .total_cmp(&spans[*left].bbox.y)
+            .then(spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x))
+    });
+
+    let mut rows: Vec<(f32, Vec<usize>)> = Vec::new();
+    for index in ordered {
+        let center_y = spans[index].bbox.y + spans[index].bbox.height * 0.5;
+        if let Some((_, indices)) = rows
+            .iter_mut()
+            .find(|(baseline, _)| (center_y - *baseline).abs() <= body_font_size * 0.4)
+        {
+            indices.push(index);
+        } else {
+            rows.push((center_y, vec![index]));
+        }
+    }
+
+    let mut components = Vec::new();
+    for (_, mut indices) in rows {
+        indices.sort_by(|left, right| spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x));
+        let mut current = Vec::new();
+        let mut right_edge = f32::NEG_INFINITY;
+        for index in indices {
+            let span = &spans[index];
+            if !current.is_empty() && span.bbox.x - right_edge > body_font_size * 2.5 {
+                components.push(component_from_indices(std::mem::take(&mut current), spans));
+            }
+            right_edge = right_edge.max(span.bbox.x + span.bbox.width);
+            current.push(index);
+        }
+        if !current.is_empty() {
+            components.push(component_from_indices(current, spans));
+        }
+    }
+    components
+}
+
+fn component_from_indices(indices: Vec<usize>, spans: &[TextSpan]) -> SpanComponent {
+    let bbox = indices
+        .iter()
+        .skip(1)
+        .fold(spans[indices[0]].bbox, |bbox, index| {
+            union_rect(bbox, spans[*index].bbox)
+        });
+    SpanComponent { indices, bbox }
+}
+
+fn is_display_formula_component(
+    component: &SpanComponent,
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    two_columns: bool,
+    veto_regions: &[Rect],
+) -> bool {
+    if overlaps_any(component.bbox, veto_regions) {
+        return false;
+    }
+    let body_font_size = median_body_font_size(spans);
+    let (column_left, column_right) = local_column_bounds(component.bbox, page_bounds, two_columns);
+    let column_width = column_right - column_left;
+    let left_margin = component.bbox.x - column_left;
+    let right_margin = column_right - component.bbox.x - component.bbox.width;
+    if component.bbox.width < body_font_size * 4.0
+        || component.bbox.width > column_width * 0.78
+        || left_margin < column_width * 0.1
+        || right_margin < column_width * 0.1
+    {
+        return false;
+    }
+
+    let mut total_characters = 0usize;
+    let mut math_characters = 0usize;
+    let mut alphabetic_words = 0usize;
+    let mut has_relation = false;
+    for index in &component.indices {
+        let span = &spans[*index];
+        if span.heading_level.is_some() || span.is_monospace || is_veto_label(&span.text) {
+            return false;
+        }
+        let character_count = span
+            .text
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .count();
+        total_characters += character_count;
+        if is_math_span(span) {
+            math_characters += character_count;
+        }
+        if !is_math_span(span) {
+            alphabetic_words += span
+                .text
+                .split_whitespace()
+                .filter(|word| {
+                    word.chars()
+                        .filter(|character| character.is_alphabetic())
+                        .count()
+                        >= 2
+                })
+                .count();
+        }
+        has_relation |= contains_relation_operator(&span.text);
+    }
+    has_relation
+        && alphabetic_words <= 8
+        && total_characters >= 6
+        && math_characters * 5 >= total_characters
+}
+
+fn local_column_bounds(bbox: Rect, page_bounds: Rect, two_columns: bool) -> (f32, f32) {
+    let page_right = page_bounds.x + page_bounds.width;
+    if !two_columns {
+        return (page_bounds.x, page_right);
+    }
+    let midpoint = page_bounds.x + page_bounds.width * 0.5;
+    if bbox.x + bbox.width * 0.5 < midpoint {
+        (page_bounds.x, midpoint)
+    } else {
+        (midpoint, page_right)
+    }
+}
+
+fn rects_intersect(left: Rect, right: Rect) -> bool {
+    left.x < right.x + right.width
+        && left.x + left.width > right.x
+        && left.y < right.y + right.height
+        && left.y + left.height > right.y
+}
+
+fn rect_vertical_gap(left: Rect, right: Rect) -> f32 {
+    let left_top = left.y + left.height;
+    let right_top = right.y + right.height;
+    if left_top < right.y {
+        right.y - left_top
+    } else if right_top < left.y {
+        left.y - right_top
+    } else {
+        0.0
+    }
+}
+
+fn is_vertically_isolated(
+    bbox: Rect,
+    member_indices: &[usize],
+    spans: &[TextSpan],
+    column_left: f32,
+    column_right: f32,
+    body_font_size: f32,
+) -> bool {
+    let minimum_gap = body_font_size * 0.75;
+    spans.iter().enumerate().all(|(index, span)| {
+        if member_indices.binary_search(&index).is_ok() {
+            return true;
+        }
+        let center_x = span.bbox.x + span.bbox.width * 0.5;
+        let horizontal_overlap =
+            (bbox.x + bbox.width).min(span.bbox.x + span.bbox.width) - bbox.x.max(span.bbox.x);
+        center_x < column_left
+            || center_x > column_right
+            || horizontal_overlap <= 0.0
+            || rect_vertical_gap(bbox, span.bbox) >= minimum_gap
+    })
+}
+
+fn is_veto_label(text: &str) -> bool {
+    let text = text.trim_start();
+    [
+        "Figure ",
+        "Fig. ",
+        "Table ",
+        "Algorithm ",
+        "Listing ",
+        "Input:",
+        "Output:",
+        "parameter:",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
+}
+
+fn median_body_font_size(spans: &[TextSpan]) -> f32 {
+    let mut sizes: Vec<f32> = spans
+        .iter()
+        .filter(|span| {
+            span.heading_level.is_none()
+                && span.font_size.is_finite()
+                && (5.0..=24.0).contains(&span.font_size)
+                && span.text.chars().any(char::is_alphabetic)
+        })
+        .map(|span| span.font_size)
+        .collect();
+    sizes.sort_by(f32::total_cmp);
+    sizes.get(sizes.len() / 2).copied().unwrap_or(10.0)
+}
+
+fn page_has_two_text_columns(spans: &[TextSpan], page_bounds: Rect) -> bool {
+    let midpoint = page_bounds.x + page_bounds.width * 0.5;
+    let minimum_width = page_bounds.width * 0.2;
+    let mut left = 0usize;
+    let mut right = 0usize;
+    let mut crossing = 0usize;
+    for span in spans.iter().filter(|span| {
+        span.bbox.width >= minimum_width
+            && span
+                .text
+                .chars()
+                .filter(|character| character.is_alphabetic())
+                .count()
+                >= 20
+    }) {
+        let right_edge = span.bbox.x + span.bbox.width;
+        if right_edge < midpoint - 5.0 {
+            left += 1;
+        } else if span.bbox.x > midpoint + 5.0 {
+            right += 1;
+        } else {
+            crossing += 1;
+        }
+    }
+    left >= 4 && right >= 4 && crossing <= 2
+}
+
+fn is_equation_number(text: &str) -> bool {
+    let trimmed = text.trim();
+    let Some(inner) = trimmed
+        .strip_prefix('(')
+        .and_then(|value| value.strip_suffix(')'))
+    else {
+        return false;
+    };
+    !inner.is_empty()
+        && inner.len() <= 6
+        && inner
+            .chars()
+            .all(|character| character.is_ascii_digit() || character.is_ascii_lowercase())
+        && inner.chars().any(|character| character.is_ascii_digit())
+}
+
+fn is_math_span(span: &TextSpan) -> bool {
+    let font = span.font_name.to_ascii_lowercase();
+    [
+        "math", "cmmi", "cmsy", "cmex", "txmi", "txsy", "txex", "msam", "msbm",
+    ]
+    .iter()
+    .any(|marker| font.contains(marker))
+        || span.text.chars().any(|character| {
+            matches!(
+                character,
+                '∑' | '∏'
+                    | '∫'
+                    | '√'
+                    | '≤'
+                    | '≥'
+                    | '≠'
+                    | '≈'
+                    | '∞'
+                    | '∈'
+                    | '∉'
+                    | '⊂'
+                    | '⊆'
+                    | '∪'
+                    | '∩'
+                    | '∀'
+                    | '∃'
+                    | '⇒'
+                    | '⇔'
+                    | '→'
+                    | '←'
+            )
+        })
+}
+
+fn contains_relation_operator(text: &str) -> bool {
+    text.chars().any(|character| {
+        matches!(
+            character,
+            '=' | '<' | '>' | '≤' | '≥' | '≠' | '≈' | '∝' | '←' | '→'
+        )
+    })
+}
+
+fn is_mixed_prose_span(span: &TextSpan) -> bool {
+    let words = span
+        .text
+        .split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphabetic))
+        .count();
+    words >= 5 && !is_math_span(span)
+}
+
+fn overlaps_any(subject: Rect, regions: &[Rect]) -> bool {
+    regions
+        .iter()
+        .any(|region| overlap_fraction(subject, *region) >= 0.25)
 }
 
 fn find_figure_captions(
@@ -703,7 +1539,7 @@ fn collect_page_images(
                 image_index + 1,
                 page_index + 1
             ),
-            placement_hint: None,
+            placement: ImagePlacement::EndOfPage,
         });
     }
 
@@ -721,6 +1557,40 @@ fn overlap_fraction(subject: Rect, region: Rect) -> f32 {
     } else {
         ((right - left) * (top - bottom) / subject_area).clamp(0.0, 1.0)
     }
+}
+
+fn extract_page_xhtml(
+    document: &PdfDocument,
+    page_index: usize,
+    options: &ConversionOptions,
+) -> Result<(String, String), EpubError> {
+    let markdown =
+        document
+            .to_markdown(page_index, options)
+            .map_err(|error| EpubError::Extract {
+                page: page_index + 1,
+                message: error.to_string(),
+            })?;
+    let mut html = markdown_to_xhtml(&markdown);
+    strip_invalid_xml_characters(&mut html);
+    Ok((markdown, html))
+}
+
+fn equation_anchors_are_unique(html: &str, images: &[PageImage]) -> bool {
+    let mut matched_paragraphs = Vec::new();
+    for image in images {
+        let ImagePlacement::EquationAnchor(anchor) = &image.placement else {
+            continue;
+        };
+        let Some((start, end, _, _)) = find_equation_anchor_paragraph(html, anchor) else {
+            return false;
+        };
+        if matched_paragraphs.contains(&(start, end)) {
+            return false;
+        }
+        matched_paragraphs.push((start, end));
+    }
+    true
 }
 
 fn package_epub(
@@ -749,10 +1619,25 @@ fn package_epub(
         for image in page.images {
             let source = format!("../{}", escape_xml(&image.href));
             let alt = escape_xml(&image.alt);
-            let placed = image.placement_hint.as_deref().is_some_and(|hint| {
-                replace_caption_paragraph_with_figure(&mut body, hint, &source, &alt)
-            });
+            let placed = match &image.placement {
+                ImagePlacement::Caption(marker) => {
+                    replace_caption_paragraph_with_figure(&mut body, marker, &source, &alt)
+                }
+                ImagePlacement::EquationAnchor(anchor) => {
+                    replace_equation_anchor_with_image(&mut body, anchor, &source, &alt)
+                }
+                ImagePlacement::EndOfPage => false,
+            };
             if !placed {
+                if matches!(image.placement, ImagePlacement::EquationAnchor(_)) {
+                    // Equation text was removed only after this anchor was
+                    // validated. Fail closed if packaging sees a different
+                    // chapter instead of silently dropping mathematical content.
+                    return Err(EpubError::Package(format!(
+                        "validated equation anchor disappeared from source page {}",
+                        page.number
+                    )));
+                }
                 deferred_images.push_str(&format!(
                     "<figure class=\"figure-fallback\"><img src=\"{source}\" alt=\"{alt}\"/><figcaption>{alt}</figcaption></figure>\n"
                 ));
@@ -819,6 +1704,66 @@ fn replace_caption_paragraph_with_figure(
         search_from = paragraph_end;
     }
     false
+}
+
+fn replace_equation_anchor_with_image(
+    body: &mut String,
+    anchor: &str,
+    image_source: &str,
+    image_alt: &str,
+) -> bool {
+    let Some((paragraph_start, paragraph_end, content_start, anchor_start)) =
+        find_equation_anchor_paragraph(body, anchor)
+    else {
+        return false;
+    };
+    let content_end = paragraph_end - "</p>".len();
+    let content = &body[content_start..content_end];
+    let prefix = content[..anchor_start].trim_end();
+    let figure = format!(
+        "<figure class=\"equation-fallback\"><img src=\"{image_source}\" alt=\"{image_alt}\"/></figure>"
+    );
+    let replacement = if strip_markup(prefix).trim().is_empty() {
+        figure
+    } else {
+        format!(
+            "{}{}</p>\n{figure}",
+            &body[paragraph_start..content_start],
+            prefix
+        )
+    };
+    body.replace_range(paragraph_start..paragraph_end, &replacement);
+    true
+}
+
+fn find_equation_anchor_paragraph(
+    body: &str,
+    anchor: &str,
+) -> Option<(usize, usize, usize, usize)> {
+    let mut search_from = 0usize;
+    let mut match_result = None;
+    while let Some(relative_start) = body[search_from..].find("<p") {
+        let paragraph_start = search_from + relative_start;
+        let relative_open_end = body[paragraph_start..].find('>')?;
+        let content_start = paragraph_start + relative_open_end + 1;
+        let relative_close = body[content_start..].find("</p>")?;
+        let content_end = content_start + relative_close;
+        let paragraph_end = content_end + "</p>".len();
+        let content = &body[content_start..content_end];
+        let text = strip_markup(content);
+        if text.trim_end().ends_with(anchor) {
+            let anchor_start = content.rfind(anchor)?;
+            if !content[anchor_start + anchor.len()..].trim().is_empty() {
+                return None;
+            }
+            if match_result.is_some() {
+                return None;
+            }
+            match_result = Some((paragraph_start, paragraph_end, content_start, anchor_start));
+        }
+        search_from = paragraph_end;
+    }
+    match_result
 }
 
 fn enhance_algorithm_blocks(html: &mut String) {
@@ -1116,6 +2061,14 @@ mod tests {
     }
 
     #[test]
+    fn bounds_encoded_image_buffers() {
+        let mut output = BoundedBuffer::new(3);
+        assert!(output.write_all(b"four").is_err());
+        assert!(output.limit_exceeded);
+        assert!(output.into_inner().is_empty());
+    }
+
+    #[test]
     fn measures_image_overlap_for_crop_deduplication() {
         let image = Rect::new(10.0, 10.0, 100.0, 100.0);
         assert_eq!(
@@ -1150,6 +2103,202 @@ mod tests {
         assert_eq!(overlap_fraction(prose_above_figure, graphics[0]), 0.0);
     }
 
+    fn test_span(text: &str, x: f32, y: f32, width: f32, font: &str) -> TextSpan {
+        TextSpan {
+            text: text.to_string(),
+            bbox: Rect::new(x, y, width, 10.0),
+            font_name: font.to_string(),
+            font_size: 10.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn detects_right_numbered_display_equation() {
+        let mut spans = vec![
+            test_span(
+                "Body prose before the display equation.",
+                108.0,
+                350.0,
+                396.0,
+                "Times",
+            ),
+            test_span("Attention(", 220.0, 311.0, 46.0, "CMR10"),
+            test_span("Q, K, V", 266.0, 311.0, 31.0, "CMMI10"),
+            test_span(") = softmax(", 299.0, 311.0, 55.0, "CMR10"),
+            test_span("QK", 356.0, 318.0, 18.0, "CMMI10"),
+            test_span("d", 366.0, 303.0, 5.0, "CMMI10"),
+            test_span(")V", 380.0, 311.0, 10.0, "CMMI10"),
+            test_span("(1)", 493.0, 311.0, 12.0, "Times"),
+            test_span(
+                "Body prose after the display equation.",
+                108.0,
+                270.0,
+                396.0,
+                "Times",
+            ),
+        ];
+        for offset in 0..4 {
+            spans.push(test_span(
+                "Additional ordinary body text for font statistics.",
+                108.0,
+                500.0 + offset as f32 * 12.0,
+                396.0,
+                "Times",
+            ));
+        }
+        let plans = find_display_equations(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].anchor, "(1)");
+        assert!(
+            plans[0]
+                .exclusion_rects
+                .iter()
+                .all(|bbox| overlap_fraction(spans[7].bbox, *bbox) < 0.5)
+        );
+    }
+
+    #[test]
+    fn partitions_adjacent_numbered_equations() {
+        let mut spans = vec![
+            test_span("f(", 210.0, 410.0, 12.0, "CMR10"),
+            test_span("x", 222.0, 410.0, 7.0, "CMMI10"),
+            test_span(") = 1", 229.0, 410.0, 35.0, "CMR10"),
+            test_span("(1)", 493.0, 410.0, 12.0, "Times"),
+            test_span("g(", 210.0, 395.0, 12.0, "CMR10"),
+            test_span("x", 222.0, 395.0, 7.0, "CMMI10"),
+            test_span(") = 2", 229.0, 395.0, 35.0, "CMR10"),
+            test_span("(2)", 493.0, 395.0, 12.0, "Times"),
+        ];
+        for offset in 0..8 {
+            spans.push(test_span(
+                "Additional ordinary body text for font statistics.",
+                108.0,
+                500.0 + offset as f32 * 12.0,
+                396.0,
+                "Times",
+            ));
+        }
+        let plans = find_display_equations(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]);
+        assert_eq!(
+            plans
+                .iter()
+                .map(|plan| plan.anchor.as_str())
+                .collect::<Vec<_>>(),
+            vec!["(1)", "(2)"]
+        );
+        assert!(overlap_fraction(plans[0].render_bbox, plans[1].render_bbox) < 0.1);
+    }
+
+    #[test]
+    fn rejects_inline_math_and_numbered_list_items() {
+        let spans = vec![
+            test_span(
+                "The loss L(x) = 3 is minimized in this example.",
+                108.0,
+                400.0,
+                396.0,
+                "Times",
+            ),
+            test_span("(1)", 108.0, 380.0, 12.0, "Times"),
+            test_span("First ordinary list item", 128.0, 380.0, 180.0, "Times"),
+        ];
+        assert!(find_display_equations(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]).is_empty());
+    }
+
+    #[test]
+    fn detects_isolated_unnumbered_equation() {
+        let spans = vec![
+            test_span(
+                "Body prose before the display equation.",
+                108.0,
+                680.0,
+                396.0,
+                "Times",
+            ),
+            test_span("MultiHead(", 187.0, 637.0, 50.0, "CMR10"),
+            test_span("Q, K, V", 237.0, 637.0, 31.0, "CMMI10"),
+            test_span(") = Concat(head", 271.0, 637.0, 72.0, "CMR10"),
+            test_span("1, ..., head", 343.0, 637.0, 50.0, "CMMI10"),
+            test_span("h)W", 394.0, 637.0, 17.0, "CMMI10"),
+            test_span(
+                "Body prose after the display equation.",
+                108.0,
+                590.0,
+                396.0,
+                "Times",
+            ),
+        ];
+        let plans = find_display_equations(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].anchor, "MultiHead(");
+    }
+
+    #[test]
+    fn rejects_equations_inside_figures_or_tables() {
+        let spans = vec![
+            test_span("FFN(", 227.0, 215.0, 24.0, "CMR10"),
+            test_span("x", 251.0, 215.0, 7.0, "CMMI10"),
+            test_span(") = max(0,", 258.0, 215.0, 55.0, "CMR10"),
+            test_span("xW", 313.0, 215.0, 20.0, "CMMI10"),
+            test_span("(2)", 493.0, 215.0, 12.0, "Times"),
+        ];
+        let occupied = Rect::new(200.0, 190.0, 320.0, 60.0);
+        assert!(
+            find_display_equations(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[occupied])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn skips_unnumbered_equations_on_algorithm_pages() {
+        let spans = vec![
+            test_span("Algorithm 2:", 60.0, 500.0, 70.0, "Times"),
+            test_span("score(", 187.0, 400.0, 40.0, "CMR10"),
+            test_span("x", 227.0, 400.0, 7.0, "CMMI10"),
+            test_span(") = 1", 234.0, 400.0, 35.0, "CMR10"),
+        ];
+        assert!(find_display_equations(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]).is_empty());
+    }
+
+    #[test]
+    fn requires_a_unique_equation_anchor() {
+        let image = PageImage {
+            href: "images/equation.png".to_string(),
+            bytes: Vec::new(),
+            alt: "Display equation".to_string(),
+            placement: ImagePlacement::EquationAnchor("(1)".to_string()),
+        };
+        assert!(equation_anchors_are_unique(
+            "<p>Formula: (1)</p>",
+            std::slice::from_ref(&image)
+        ));
+        assert!(!equation_anchors_are_unique(
+            "<p>No anchor</p>",
+            std::slice::from_ref(&image)
+        ));
+        assert!(!equation_anchors_are_unique(
+            "<p>(1)</p><p>Again (1)</p>",
+            &[image]
+        ));
+
+        let colliding = [
+            PageImage {
+                href: "images/first.png".to_string(),
+                bytes: Vec::new(),
+                alt: "First equation".to_string(),
+                placement: ImagePlacement::EquationAnchor("MultiHead".to_string()),
+            },
+            PageImage {
+                href: "images/second.png".to_string(),
+                bytes: Vec::new(),
+                alt: "Second equation".to_string(),
+                placement: ImagePlacement::EquationAnchor("Head".to_string()),
+            },
+        ];
+        assert!(!equation_anchors_are_unique("<p>MultiHead</p>", &colliding));
+    }
+
     #[test]
     fn replaces_formatted_caption_with_accessible_figure() {
         let mut body = "<p>Before Figure 1.</p>\n<p><strong>Figure</strong> <strong>1:</strong> Sample graph</p>\n<p>After.</p>".to_string();
@@ -1164,6 +2313,22 @@ mod tests {
         ));
         assert_eq!(body.matches("Figure</strong> <strong>1:").count(), 1);
         assert!(body.ends_with("<p>After.</p>"));
+    }
+
+    #[test]
+    fn replaces_equation_anchor_after_lead_prose() {
+        let mut body = "<p>According to the formula: (3)</p>\n<p>After.</p>".to_string();
+        assert!(replace_equation_anchor_with_image(
+            &mut body,
+            "(3)",
+            "../images/equation.png",
+            "Display equation (3)"
+        ));
+        assert!(body.contains("<p>According to the formula:</p>"));
+        assert!(body.contains(
+            "<figure class=\"equation-fallback\"><img src=\"../images/equation.png\" alt=\"Display equation (3)\"/></figure>"
+        ));
+        assert!(!body.contains("formula: (3)"));
     }
 
     #[test]
