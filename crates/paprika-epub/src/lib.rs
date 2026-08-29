@@ -30,6 +30,8 @@ const MAX_FIGURE_RENDER_PIXELS: u64 = 8_000_000;
 const MAX_FIGURE_RENDER_EDGE: u32 = 8_192;
 const FIGURE_RENDER_SCALE: f32 = 2.0;
 const FIGURE_CROP_HEIGHT_POINTS: f32 = 225.0;
+const FORMULA_HEAVY_MIN_MATH_SPANS: usize = 100;
+const FORMULA_HEAVY_MIN_MATH_CHARACTERS: usize = 100;
 
 const EPUB_CSS: &str = r#"
 :root { color-scheme: light dark; }
@@ -57,6 +59,8 @@ table {
 th, td { border: 1px solid currentColor; padding: 0.25em; }
 figure { break-inside: avoid; margin: 1em 0; text-align: center; }
 figure img { height: auto; max-width: 100%; }
+.visual-page-fallback { margin: 0; }
+.visual-page-fallback img { display: block; width: 100%; }
 figcaption, .source-page, .conversion-note {
   color: #666;
   font-family: sans-serif;
@@ -158,6 +162,7 @@ struct PageImage {
 enum ImagePlacement {
     Caption(String),
     EquationAnchor(String),
+    VisualPageFallback,
     EndOfPage,
 }
 
@@ -321,6 +326,7 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
     let mut text_pages = 0usize;
 
     for page_index in 0..page_count {
+        let page_asset_bytes = asset_bytes;
         let crops = if options.include_images {
             render_document
                 .as_ref()
@@ -339,6 +345,59 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
         } else {
             FigureCrops::default()
         };
+        if let Some(source) = render_document.as_ref().filter(|_| options.include_images) {
+            let spans = document.extract_spans(page_index).unwrap_or_default();
+            if is_math_dense_candidate(&spans, &crops.regions) {
+                let mut probe_options = extraction_options.clone();
+                probe_options.exclude_regions = crops.text_exclusions.clone();
+                probe_options.exclude_regions_mode = RectFilterMode::MinOverlap(0.5);
+                let (_, probe_html) = extract_page_xhtml(&document, page_index, &probe_options)?;
+                let should_fallback =
+                    math_extraction_is_unreliable(&spans, &crops.regions, &probe_html);
+                if should_fallback {
+                    let mut fallback_asset_bytes = page_asset_bytes;
+                    let images = collect_formula_page_crops(
+                        source,
+                        &document,
+                        page_index,
+                        &spans,
+                        &mut fallback_asset_bytes,
+                        options.max_asset_bytes,
+                        &mut warnings,
+                    )?;
+                    if !images.is_empty() {
+                        let html = format!(
+                            "<p class=\"conversion-note\">Source page {} contains dense mathematical layout that could not be represented reliably as selectable text. It is preserved visually in reading order.</p>\n",
+                            page_index + 1
+                        );
+                        semantic_bytes = semantic_bytes.checked_add(html.len()).ok_or(
+                            EpubError::SemanticTooLarge {
+                                limit: options.max_semantic_bytes / (1024 * 1024),
+                            },
+                        )?;
+                        if semantic_bytes > options.max_semantic_bytes {
+                            return Err(EpubError::SemanticTooLarge {
+                                limit: options.max_semantic_bytes / (1024 * 1024),
+                            });
+                        }
+                        asset_bytes = fallback_asset_bytes;
+                        image_count += images.len();
+                        warnings.push(format!(
+                        "Page {} has dense mathematical layout and was preserved as visual columns.",
+                        page_index + 1
+                    ));
+                        semantic_pages.push(SemanticPage {
+                            number: page_index + 1,
+                            title: format!("Page {}", page_index + 1),
+                            html,
+                            images,
+                            has_text: false,
+                        });
+                        continue;
+                    }
+                }
+            }
+        }
         let mut equations = if options.include_images {
             render_document
                 .as_ref()
@@ -466,6 +525,528 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
         image_count,
         warnings,
     })
+}
+
+fn is_math_dense_candidate(spans: &[TextSpan], excluded_regions: &[Rect]) -> bool {
+    let mut content_spans = 0usize;
+    let mut math_spans = 0usize;
+    let mut math_characters = 0usize;
+
+    for span in spans.iter().filter(|span| {
+        !span.text.trim().is_empty()
+            && span.artifact_type.is_none()
+            && span.rotation_degrees.abs() < 1.0
+            && !overlaps_any(span.bbox, excluded_regions)
+    }) {
+        content_spans += 1;
+        if is_math_span(span) {
+            math_spans += 1;
+            math_characters += span
+                .text
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .count();
+        }
+    }
+
+    math_spans >= FORMULA_HEAVY_MIN_MATH_SPANS
+        && math_characters >= FORMULA_HEAVY_MIN_MATH_CHARACTERS
+        && math_spans.saturating_mul(3) >= content_spans
+}
+
+fn math_extraction_is_unreliable(
+    spans: &[TextSpan],
+    excluded_regions: &[Rect],
+    extracted_html: &str,
+) -> bool {
+    let body_font_size = median_body_font_size(spans);
+    let math_spans: Vec<&TextSpan> = spans
+        .iter()
+        .filter(|span| {
+            span.artifact_type.is_none()
+                && span.rotation_degrees.abs() < 1.0
+                && !overlaps_any(span.bbox, excluded_regions)
+                && is_math_span(span)
+        })
+        .collect();
+    let source_syntax = math_spans
+        .iter()
+        .map(|span| math_syntax_count(&span.text))
+        .sum::<usize>();
+    let non_math_source_syntax = spans
+        .iter()
+        .filter(|span| {
+            span.artifact_type.is_none()
+                && span.rotation_degrees.abs() < 1.0
+                && !overlaps_any(span.bbox, excluded_regions)
+                && !is_math_span(span)
+        })
+        .map(|span| math_syntax_count(&span.text))
+        .sum::<usize>();
+    let extracted_syntax = math_syntax_count(&strip_markup(extracted_html));
+    let retained_math_syntax = extracted_syntax.saturating_sub(non_math_source_syntax);
+    let fragmented_spans = math_spans
+        .iter()
+        .filter(|span| {
+            span.text
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .count()
+                <= 2
+        })
+        .count();
+    let script_spans = math_spans
+        .iter()
+        .filter(|span| span.font_size <= body_font_size * 0.82)
+        .count();
+
+    (source_syntax >= 6 && retained_math_syntax.saturating_mul(2) < source_syntax)
+        || (fragmented_spans >= FORMULA_HEAVY_MIN_MATH_SPANS && script_spans >= 12)
+}
+
+fn math_syntax_count(text: &str) -> usize {
+    text.chars()
+        .filter(|character| {
+            matches!(
+                character,
+                '=' | '+'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '−'
+                    | '±'
+                    | '×'
+                    | '÷'
+                    | '<'
+                    | '>'
+                    | '≤'
+                    | '≥'
+                    | '≠'
+                    | '≈'
+                    | '∝'
+                    | '←'
+                    | '→'
+                    | '∑'
+                    | '∏'
+                    | '∫'
+                    | '√'
+                    | '∈'
+                    | '∉'
+                    | '⊂'
+                    | '⊆'
+                    | '∪'
+                    | '∩'
+            )
+        })
+        .count()
+}
+
+fn visual_page_regions(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    graphic_bounds: &[Rect],
+) -> Vec<(Rect, String)> {
+    let two_columns = page_has_two_text_columns(spans, page_bounds)
+        && !has_full_width_content(spans, page_bounds, graphic_bounds);
+    let columns = if two_columns {
+        let midpoint = page_bounds.x + page_bounds.width * 0.5;
+        // Overlap the center instead of deleting a presumed gutter. This also
+        // preserves equations and headings that cross the detected columns.
+        let overlap = page_bounds.width * 0.015;
+        vec![
+            Rect::new(
+                page_bounds.x,
+                page_bounds.y,
+                midpoint + overlap - page_bounds.x,
+                page_bounds.height,
+            ),
+            Rect::new(
+                midpoint - overlap,
+                page_bounds.y,
+                page_bounds.x + page_bounds.width - midpoint + overlap,
+                page_bounds.height,
+            ),
+        ]
+    } else {
+        vec![page_bounds]
+    };
+
+    let mut regions = Vec::new();
+    for (column_index, column) in columns.into_iter().enumerate() {
+        let parts: Vec<Rect> = split_visual_column(column, spans, graphic_bounds)
+            .into_iter()
+            .filter(|part| visual_region_has_content(*part, spans, graphic_bounds))
+            .collect();
+        let part_count = parts.len();
+        for (part_index, part) in parts.into_iter().enumerate() {
+            let label = if two_columns {
+                format!(
+                    "{} column, part {} of {}",
+                    if column_index == 0 { "left" } else { "right" },
+                    part_index + 1,
+                    part_count
+                )
+            } else {
+                format!("part {} of {}", part_index + 1, part_count)
+            };
+            regions.push((part, label));
+        }
+    }
+    regions
+}
+
+fn visual_region_has_content(region: Rect, spans: &[TextSpan], graphic_bounds: &[Rect]) -> bool {
+    spans.iter().any(|span| {
+        !span.text.trim().is_empty()
+            && materially_overlaps_horizontally(span.bbox, region)
+            && rects_intersect(span.bbox, region)
+    }) || graphic_bounds.iter().any(|bbox| {
+        materially_overlaps_horizontally(*bbox, region) && rects_intersect(*bbox, region)
+    })
+}
+
+fn has_full_width_content(spans: &[TextSpan], page_bounds: Rect, graphic_bounds: &[Rect]) -> bool {
+    let midpoint = page_bounds.x + page_bounds.width * 0.5;
+    let body_font_size = median_body_font_size(spans);
+    let components = horizontal_span_components(spans, body_font_size);
+    let mut wide_text_rows = 0usize;
+    for component in components {
+        let crosses_midpoint =
+            component.bbox.x < midpoint && component.bbox.x + component.bbox.width > midpoint;
+        let contiguous_across_midpoint = component.indices.iter().any(|index| {
+            let bbox = spans[*index].bbox;
+            bbox.x < midpoint && bbox.x + bbox.width > midpoint
+        }) || {
+            let left_edge = component
+                .indices
+                .iter()
+                .map(|index| spans[*index].bbox)
+                .filter(|bbox| bbox.x + bbox.width <= midpoint)
+                .map(|bbox| bbox.x + bbox.width)
+                .max_by(f32::total_cmp);
+            let right_edge = component
+                .indices
+                .iter()
+                .map(|index| spans[*index].bbox)
+                .filter(|bbox| bbox.x >= midpoint)
+                .map(|bbox| bbox.x)
+                .min_by(f32::total_cmp);
+            left_edge
+                .zip(right_edge)
+                .is_some_and(|(left, right)| right - left <= body_font_size)
+        };
+        if crosses_midpoint && contiguous_across_midpoint {
+            if component
+                .indices
+                .iter()
+                .any(|index| is_math_span(&spans[*index]))
+            {
+                return true;
+            }
+            if component.bbox.width >= page_bounds.width * 0.5 {
+                wide_text_rows += 1;
+            }
+        }
+    }
+    if wide_text_rows >= 2 {
+        return true;
+    }
+
+    graphic_components(graphic_bounds, page_bounds, body_font_size * 1.5)
+        .into_iter()
+        .any(|bbox| {
+            bbox.x < midpoint
+                && bbox.x + bbox.width > midpoint
+                && bbox.width >= page_bounds.width * 0.45
+                && bbox.height >= body_font_size * 2.0
+        })
+}
+
+fn graphic_components(bounds: &[Rect], page_bounds: Rect, proximity: f32) -> Vec<Rect> {
+    let cell_size = proximity.max(8.0);
+    let columns = (page_bounds.width / cell_size).ceil().max(1.0) as usize;
+    let rows = (page_bounds.height / cell_size).ceil().max(1.0) as usize;
+    let mut occupied = vec![false; columns.saturating_mul(rows)];
+
+    for &bound in bounds {
+        let Some(expanded) = intersect_rect(expand_rect(bound, proximity), page_bounds) else {
+            continue;
+        };
+        let first_column =
+            (((expanded.x - page_bounds.x) / cell_size).floor().max(0.0) as usize).min(columns - 1);
+        let last_column = (((expanded.x + expanded.width - page_bounds.x) / cell_size)
+            .floor()
+            .max(0.0) as usize)
+            .min(columns - 1);
+        let first_row =
+            (((expanded.y - page_bounds.y) / cell_size).floor().max(0.0) as usize).min(rows - 1);
+        let last_row = (((expanded.y + expanded.height - page_bounds.y) / cell_size)
+            .floor()
+            .max(0.0) as usize)
+            .min(rows - 1);
+        for row in first_row..=last_row {
+            for column in first_column..=last_column {
+                occupied[row * columns + column] = true;
+            }
+        }
+    }
+
+    let mut visited = vec![false; occupied.len()];
+    let mut components = Vec::new();
+    for start in 0..occupied.len() {
+        if !occupied[start] || visited[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        visited[start] = true;
+        let mut minimum_column = start % columns;
+        let mut maximum_column = minimum_column;
+        let mut minimum_row = start / columns;
+        let mut maximum_row = minimum_row;
+        while let Some(cell) = stack.pop() {
+            let column = cell % columns;
+            let row = cell / columns;
+            minimum_column = minimum_column.min(column);
+            maximum_column = maximum_column.max(column);
+            minimum_row = minimum_row.min(row);
+            maximum_row = maximum_row.max(row);
+            for (next_column, next_row) in [
+                column.checked_sub(1).map(|value| (value, row)),
+                (column + 1 < columns).then_some((column + 1, row)),
+                row.checked_sub(1).map(|value| (column, value)),
+                (row + 1 < rows).then_some((column, row + 1)),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let next = next_row * columns + next_column;
+                if occupied[next] && !visited[next] {
+                    visited[next] = true;
+                    stack.push(next);
+                }
+            }
+        }
+        let x = page_bounds.x + minimum_column as f32 * cell_size;
+        let y = page_bounds.y + minimum_row as f32 * cell_size;
+        let right = (page_bounds.x + (maximum_column + 1) as f32 * cell_size)
+            .min(page_bounds.x + page_bounds.width);
+        let top = (page_bounds.y + (maximum_row + 1) as f32 * cell_size)
+            .min(page_bounds.y + page_bounds.height);
+        components.push(Rect::new(x, y, right - x, top - y));
+    }
+    components
+}
+
+fn split_visual_column(column: Rect, spans: &[TextSpan], graphic_bounds: &[Rect]) -> Vec<Rect> {
+    let maximum_height = (column.width * 1.45).max(240.0);
+    if column.height <= maximum_height * 1.1 {
+        return vec![column];
+    }
+
+    let column_bottom = column.y;
+    let mut current_top = column.y + column.height;
+    let mut regions = Vec::new();
+    while current_top - column_bottom > maximum_height * 1.1 {
+        let ideal_cut = current_top - maximum_height;
+        let minimum_cut = column_bottom + 80.0;
+        let maximum_cut = current_top - 80.0;
+        let Some(cut) = nearest_clear_horizontal_cut(
+            ideal_cut.clamp(minimum_cut, maximum_cut),
+            minimum_cut,
+            maximum_cut,
+            column,
+            spans,
+            graphic_bounds,
+        ) else {
+            return vec![column];
+        };
+        regions.push(Rect::new(column.x, cut, column.width, current_top - cut));
+        current_top = cut;
+    }
+    regions.push(Rect::new(
+        column.x,
+        column_bottom,
+        column.width,
+        current_top - column_bottom,
+    ));
+    regions
+}
+
+fn nearest_clear_horizontal_cut(
+    ideal: f32,
+    minimum: f32,
+    maximum: f32,
+    column: Rect,
+    spans: &[TextSpan],
+    graphic_bounds: &[Rect],
+) -> Option<f32> {
+    let search_radius = (maximum - minimum).ceil().max(0.0) as usize;
+    for offset in 0..=search_radius {
+        let distance = offset as f32;
+        for candidate in [ideal + distance, ideal - distance] {
+            if candidate < minimum || candidate > maximum {
+                continue;
+            }
+            let crosses_text = spans.iter().any(|span| {
+                materially_overlaps_horizontally(span.bbox, column)
+                    && span.bbox.y - 1.0 < candidate
+                    && span.bbox.y + span.bbox.height + 1.0 > candidate
+            });
+            let crosses_graphic = graphic_bounds.iter().any(|bbox| {
+                materially_overlaps_horizontally(*bbox, column)
+                    && bbox.y - 2.0 < candidate
+                    && bbox.y + bbox.height + 2.0 > candidate
+            });
+            if !crosses_text && !crosses_graphic {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn materially_overlaps_horizontally(content: Rect, region: Rect) -> bool {
+    let overlap =
+        (content.x + content.width).min(region.x + region.width) - content.x.max(region.x);
+    overlap > 0.0 && overlap >= content.width.min(region.width) * 0.25
+}
+
+fn collect_formula_page_crops(
+    source: &SourcePdf,
+    document: &PdfDocument,
+    page_index: usize,
+    spans: &[TextSpan],
+    total_bytes: &mut usize,
+    max_bytes: usize,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<PageImage>, EpubError> {
+    if document.get_page_rotation(page_index).unwrap_or(0) != 0 {
+        return Ok(Vec::new());
+    }
+    let Some(page) = source.pages().get(page_index) else {
+        return Ok(Vec::new());
+    };
+    let crop_box = page.intersected_crop_box();
+    let page_bounds = Rect::new(
+        crop_box.x0 as f32,
+        crop_box.y0 as f32,
+        (crop_box.x1 - crop_box.x0) as f32,
+        (crop_box.y1 - crop_box.y0) as f32,
+    );
+    if page_bounds.width <= 0.0 || page_bounds.height <= 0.0 {
+        return Ok(Vec::new());
+    }
+
+    let (base_width, base_height) = page.render_dimensions();
+    let width = (base_width * FIGURE_RENDER_SCALE).ceil().max(1.0) as u32;
+    let height = (base_height * FIGURE_RENDER_SCALE).ceil().max(1.0) as u32;
+    if width > MAX_FIGURE_RENDER_EDGE
+        || height > MAX_FIGURE_RENDER_EDGE
+        || u64::from(width) * u64::from(height) > MAX_FIGURE_RENDER_PIXELS
+        || width > u16::MAX as u32
+        || height > u16::MAX as u32
+    {
+        warnings.push(format!(
+            "Visual math fallback for page {} exceeds the render memory limit and was skipped.",
+            page_index + 1
+        ));
+        return Ok(Vec::new());
+    }
+
+    let pixmap = hayro::render(
+        page,
+        &RenderCache::new(),
+        &InterpreterSettings::default(),
+        &RenderSettings {
+            x_scale: FIGURE_RENDER_SCALE,
+            y_scale: FIGURE_RENDER_SCALE,
+            width: Some(width as u16),
+            height: Some(height as u16),
+            bg_color: WHITE,
+        },
+    );
+    let rgba: Vec<u8> = bytemuck::cast_vec(pixmap.take_unpremultiplied());
+    let Some(rendered) = image::RgbaImage::from_raw(width, height, rgba) else {
+        warnings.push(format!(
+            "Could not render visual math fallback for page {}.",
+            page_index + 1
+        ));
+        return Ok(Vec::new());
+    };
+
+    let mut graphic_bounds: Vec<Rect> = document
+        .extract_paths(page_index)
+        .map(|paths| paths.into_iter().map(|path| path.bbox).collect())
+        .unwrap_or_default();
+    let image_bounds: Vec<Rect> = document
+        .page_image_handles(page_index)
+        .map(|images| images.into_iter().map(|image| image.bbox).collect())
+        .unwrap_or_default();
+    graphic_bounds.extend(image_bounds);
+    graphic_bounds.retain(|bbox| {
+        bbox.width > 1.0
+            && bbox.height > 1.0
+            && bbox.width * bbox.height < page_bounds.width * page_bounds.height * 0.9
+    });
+
+    let regions = visual_page_regions(spans, page_bounds, &graphic_bounds);
+    let x_scale = width as f32 / page_bounds.width;
+    let y_scale = height as f32 / page_bounds.height;
+    let mut images = Vec::with_capacity(regions.len());
+    for (image_index, (region, label)) in regions.into_iter().enumerate() {
+        let x = ((region.x - page_bounds.x) * x_scale).floor().max(0.0) as u32;
+        let y = ((page_bounds.y + page_bounds.height - region.y - region.height) * y_scale)
+            .floor()
+            .max(0.0) as u32;
+        let crop_width = (region.width * x_scale)
+            .ceil()
+            .min(width.saturating_sub(x) as f32) as u32;
+        let crop_height = (region.height * y_scale)
+            .ceil()
+            .min(height.saturating_sub(y) as f32) as u32;
+        if crop_width < 80 || crop_height < 80 {
+            continue;
+        }
+
+        let crop = image::imageops::crop_imm(&rendered, x, y, crop_width, crop_height).to_image();
+        let remaining_bytes = max_bytes.saturating_sub(*total_bytes);
+        let mut output = BoundedBuffer::new(remaining_bytes);
+        if let Err(error) =
+            image::DynamicImage::ImageRgba8(crop).write_to(&mut output, image::ImageFormat::Png)
+        {
+            if output.limit_exceeded {
+                return Err(EpubError::AssetsTooLarge {
+                    limit: max_bytes / (1024 * 1024),
+                });
+            }
+            warnings.push(format!(
+                "Could not encode visual math fallback {} from page {}: {error}",
+                image_index + 1,
+                page_index + 1
+            ));
+            continue;
+        }
+        let bytes = output.into_inner();
+        account_asset(total_bytes, bytes.len(), max_bytes)?;
+        images.push(PageImage {
+            href: format!(
+                "images/page-{:04}-visual-math-{:02}.png",
+                page_index + 1,
+                image_index + 1
+            ),
+            bytes,
+            alt: format!(
+                "Visual fallback for source page {}, {}",
+                page_index + 1,
+                label
+            ),
+            placement: ImagePlacement::VisualPageFallback,
+        });
+    }
+    Ok(images)
 }
 
 fn collect_figure_crops(
@@ -1619,6 +2200,8 @@ fn package_epub(
         for image in page.images {
             let source = format!("../{}", escape_xml(&image.href));
             let alt = escape_xml(&image.alt);
+            let visual_page_fallback =
+                matches!(&image.placement, ImagePlacement::VisualPageFallback);
             let placed = match &image.placement {
                 ImagePlacement::Caption(marker) => {
                     replace_caption_paragraph_with_figure(&mut body, marker, &source, &alt)
@@ -1626,7 +2209,7 @@ fn package_epub(
                 ImagePlacement::EquationAnchor(anchor) => {
                     replace_equation_anchor_with_image(&mut body, anchor, &source, &alt)
                 }
-                ImagePlacement::EndOfPage => false,
+                ImagePlacement::VisualPageFallback | ImagePlacement::EndOfPage => false,
             };
             if !placed {
                 if matches!(image.placement, ImagePlacement::EquationAnchor(_)) {
@@ -1638,9 +2221,15 @@ fn package_epub(
                         page.number
                     )));
                 }
-                deferred_images.push_str(&format!(
-                    "<figure class=\"figure-fallback\"><img src=\"{source}\" alt=\"{alt}\"/><figcaption>{alt}</figcaption></figure>\n"
-                ));
+                if visual_page_fallback {
+                    deferred_images.push_str(&format!(
+                        "<figure class=\"visual-page-fallback\"><img src=\"{source}\" alt=\"{alt}\"/></figure>\n"
+                    ));
+                } else {
+                    deferred_images.push_str(&format!(
+                        "<figure class=\"figure-fallback\"><img src=\"{source}\" alt=\"{alt}\"/><figcaption>{alt}</figcaption></figure>\n"
+                    ));
+                }
             }
             editor = editor.resource((image.href, image.bytes));
         }
@@ -2111,6 +2700,116 @@ mod tests {
             font_size: 10.0,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn detects_formula_heavy_pages_without_overreacting_to_equations() {
+        let mut dense = Vec::new();
+        for index in 0..190 {
+            dense.push(test_span(
+                "ordinary prose",
+                40.0,
+                740.0 - index as f32,
+                120.0,
+                "Times",
+            ));
+        }
+        for index in 0..110 {
+            dense.push(test_span(
+                "𝑥=",
+                220.0,
+                740.0 - index as f32,
+                10.0,
+                "LibertineMathMI",
+            ));
+        }
+        assert!(is_math_dense_candidate(&dense, &[]));
+        assert!(math_extraction_is_unreliable(
+            &dense,
+            &[],
+            "<p>Extracted prose without mathematical relations.</p>"
+        ));
+        let preserved_operators = format!("<p>{}</p>", "=".repeat(60));
+        assert!(!math_extraction_is_unreliable(
+            &dense,
+            &[],
+            &preserved_operators
+        ));
+
+        let mut fragmented = dense.clone();
+        for span in fragmented.iter_mut().skip(190) {
+            span.text = "𝑥".to_string();
+        }
+        for span in fragmented.iter_mut().skip(190).take(15) {
+            span.font_size = 6.0;
+        }
+        assert!(math_extraction_is_unreliable(
+            &fragmented,
+            &[],
+            "<p>Flattened variables without script structure.</p>"
+        ));
+        assert!(!is_math_dense_candidate(
+            &dense,
+            &[Rect::new(200.0, 600.0, 40.0, 160.0)]
+        ));
+
+        let equation_page: Vec<_> = (0..80)
+            .map(|index| test_span("𝑥", 220.0, 740.0 - index as f32, 6.0, "LibertineMathMI"))
+            .collect();
+        assert!(!is_math_dense_candidate(&equation_page, &[]));
+    }
+
+    #[test]
+    fn splits_visual_columns_without_gaps_or_center_loss() {
+        let mut spans = Vec::new();
+        for row in 0..10 {
+            spans.push(test_span(
+                "Long ordinary text in the left source column",
+                24.0,
+                720.0 - row as f32 * 70.0,
+                240.0,
+                "Times",
+            ));
+            spans.push(test_span(
+                "Long ordinary text in the right source column",
+                348.0,
+                720.0 - row as f32 * 70.0,
+                240.0,
+                "Times",
+            ));
+        }
+        let regions = visual_page_regions(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]);
+        assert_eq!(regions.len(), 4);
+        assert!(regions[0].1.starts_with("left column"));
+        assert!(regions[2].1.starts_with("right column"));
+        assert!(regions[0].0.x + regions[0].0.width > 306.0);
+        assert!(regions[2].0.x < 306.0);
+        assert_eq!(regions[0].0.y, regions[1].0.y + regions[1].0.height);
+        assert_eq!(regions[2].0.y, regions[3].0.y + regions[3].0.height);
+
+        let parallel_columns = spans.clone();
+        spans.push(test_span(
+            "𝑓(𝑥) = 𝑦",
+            100.0,
+            400.0,
+            412.0,
+            "LibertineMathMI",
+        ));
+        let full_width = visual_page_regions(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &[]);
+        assert_eq!(full_width.len(), 1);
+        assert_eq!(full_width[0].0, Rect::new(0.0, 0.0, 612.0, 792.0));
+
+        let diagram = [
+            Rect::new(140.0, 360.0, 100.0, 80.0),
+            Rect::new(250.0, 360.0, 100.0, 80.0),
+            Rect::new(360.0, 360.0, 100.0, 80.0),
+        ];
+        let full_width = visual_page_regions(
+            &parallel_columns,
+            Rect::new(0.0, 0.0, 612.0, 792.0),
+            &diagram,
+        );
+        assert_eq!(full_width.len(), 1);
     }
 
     #[test]

@@ -12,14 +12,14 @@ The same Rust pipeline runs in the native CLI and browser WebAssembly app. An ex
 
 - Reflowable EPUB 3 output with selectable text
 - Column-aware reading order for born-digital PDFs
-- Headings, lists, links, basic tables, Unicode inline math, embedded images, captioned vector-figure crops, and conservative display-equation crops
+- Headings, lists, links, basic tables, Unicode inline math, embedded images, captioned vector-figure crops, conservative display-equation crops, and visual column fallbacks for math-dense pages
 - One source-page chapter per EPUB spine entry for traceability
 - Native CLI on Linux, macOS, and Windows
 - Browser conversion in a cancellable Web Worker
 - Static Cloudflare deployment with no upload endpoint
 - Experimental raster `fit-width`, `fit-page`, and graphical `reflow` PDF output
 
-Semantic PDF extraction is inherently heuristic. Paprika preserves confidently detected display equations as local image crops and keeps simpler inline math as Unicode text; it does not reconstruct LaTeX or MathML. Uncaptioned vector graphics, unusual layouts, and reading order can require manual review. Paprika does not run OCR; scanned pages are reported and preserved only when their raster image can be extracted. Password-protected PDFs are not supported.
+Semantic PDF extraction is inherently heuristic. Paprika preserves confidently detected display equations as local image crops and keeps simpler inline math as Unicode text; it does not reconstruct LaTeX or MathML. When a page contains too many fragmented mathematical glyphs for trustworthy semantic extraction, Paprika preserves its columns visually instead of emitting corrupted formulas. Uncaptioned vector graphics, unusual layouts, and reading order can require manual review. Paprika does not run OCR; scanned pages are reported and preserved only when their raster image can be extracted. Password-protected PDFs are not supported.
 
 ## CLI
 
