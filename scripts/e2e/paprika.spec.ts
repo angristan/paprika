@@ -49,7 +49,11 @@ test("keeps the conversion workbench usable at 320 CSS pixels", async ({ page })
   await expect(page.locator("h1")).toBeVisible();
   await expect(page.locator("#source-file")).toBeEnabled();
   await expect(page.locator("#convert")).toBeVisible();
-  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 320);
+  const metrics = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
 });
 
 test("remains usable at 200 percent zoom", async ({ page }) => {
