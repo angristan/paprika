@@ -12,6 +12,7 @@ use hayro::{RenderCache, RenderSettings};
 use pdf_oxide::PdfDocument;
 use pdf_oxide::converters::{ConversionOptions, ReadingOrderMode};
 use pdf_oxide::geometry::Rect;
+use pdf_oxide::layout::RectFilterMode;
 use pulldown_cmark::{CowStr, Event, Options as MarkdownOptions, Parser, Tag, TagEnd, html};
 use rbook::Epub;
 use rbook::epub::EpubChapter;
@@ -149,12 +150,14 @@ struct PageImage {
     href: String,
     bytes: Vec<u8>,
     alt: String,
+    placement_hint: Option<String>,
 }
 
 #[derive(Debug, Default)]
 struct FigureCrops {
     images: Vec<PageImage>,
     regions: Vec<Rect>,
+    text_exclusions: Vec<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -220,8 +223,29 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
     let mut text_pages = 0usize;
 
     for page_index in 0..page_count {
+        let crops = if options.include_images {
+            render_document
+                .as_ref()
+                .map(|source| {
+                    collect_figure_crops(
+                        source,
+                        &document,
+                        page_index,
+                        &mut asset_bytes,
+                        options.max_asset_bytes,
+                        &mut warnings,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            FigureCrops::default()
+        };
+        let mut page_extraction_options = extraction_options.clone();
+        page_extraction_options.exclude_regions = crops.text_exclusions.clone();
+        page_extraction_options.exclude_regions_mode = RectFilterMode::MinOverlap(0.5);
         let markdown = document
-            .to_markdown(page_index, &extraction_options)
+            .to_markdown(page_index, &page_extraction_options)
             .map_err(|error| EpubError::Extract {
                 page: page_index + 1,
                 message: error.to_string(),
@@ -260,25 +284,15 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
             });
         }
         let images = if options.include_images {
-            let crops = render_document
-                .as_ref()
-                .map(|source| {
-                    collect_figure_crops(
-                        source,
-                        &document,
-                        page_index,
-                        &mut asset_bytes,
-                        options.max_asset_bytes,
-                        &mut warnings,
-                    )
-                })
-                .transpose()?
-                .unwrap_or_default();
-            let mut images = crops.images;
+            let FigureCrops {
+                mut images,
+                regions,
+                ..
+            } = crops;
             images.extend(collect_page_images(
                 &document,
                 page_index,
-                &crops.regions,
+                &regions,
                 &mut asset_bytes,
                 options.max_asset_bytes,
                 &mut warnings,
@@ -394,8 +408,17 @@ fn collect_figure_crops(
 
     let x_scale = width as f32 / page_width;
     let y_scale = height as f32 / page_height;
+    let path_bounds: Vec<Rect> = document
+        .extract_paths(page_index)
+        .map(|paths| paths.into_iter().map(|path| path.bbox).collect())
+        .unwrap_or_default();
+    let image_bounds: Vec<Rect> = document
+        .page_image_handles(page_index)
+        .map(|handles| handles.into_iter().map(|image| image.bbox).collect())
+        .unwrap_or_default();
     let mut images = Vec::with_capacity(captions.len());
     let mut regions = Vec::with_capacity(captions.len());
+    let mut text_exclusions = Vec::with_capacity(captions.len());
     for (caption_index, caption) in captions.iter().enumerate() {
         let (crop_left, crop_right) = match caption.column {
             FigureColumn::Left => (llx + page_width * 0.055, llx + page_width * 0.49),
@@ -416,12 +439,24 @@ fn collect_figure_crops(
             continue;
         }
 
-        let x = ((crop_left - llx) * x_scale).floor().max(0.0) as u32;
-        let y = ((ury - crop_top) * y_scale).floor().max(0.0) as u32;
-        let crop_width = ((crop_right - crop_left) * x_scale)
+        let coarse_region = Rect::new(
+            crop_left,
+            crop_bottom,
+            crop_right - crop_left,
+            crop_top - crop_bottom,
+        );
+        let semantic_region =
+            tighten_regions_from_graphics(&[coarse_region], &path_bounds, &image_bounds)
+                .into_iter()
+                .next();
+        let x = ((coarse_region.x - llx) * x_scale).floor().max(0.0) as u32;
+        let y = ((ury - coarse_region.y - coarse_region.height) * y_scale)
+            .floor()
+            .max(0.0) as u32;
+        let crop_width = (coarse_region.width * x_scale)
             .ceil()
             .min(width.saturating_sub(x) as f32) as u32;
-        let crop_height = ((crop_top - crop_bottom) * y_scale)
+        let crop_height = (coarse_region.height * y_scale)
             .ceil()
             .min(height.saturating_sub(y) as f32) as u32;
         if crop_width < 80 || crop_height < 48 {
@@ -442,12 +477,10 @@ fn collect_figure_crops(
         }
         let bytes = cursor.into_inner();
         account_asset(total_bytes, bytes.len(), max_bytes)?;
-        regions.push(Rect::new(
-            crop_left,
-            crop_bottom,
-            crop_right - crop_left,
-            crop_top - crop_bottom,
-        ));
+        regions.push(coarse_region);
+        if let Some(region) = semantic_region {
+            text_exclusions.push(region);
+        }
         images.push(PageImage {
             href: format!(
                 "images/page-{:04}-figure-{:02}.png",
@@ -455,17 +488,18 @@ fn collect_figure_crops(
                 caption_index + 1
             ),
             bytes,
-            // Several captions in adjacent columns can share a baseline. The
-            // crop remains useful, but attaching the wrong specific caption is
-            // worse than a source-page label.
-            alt: if captions.len() == 1 {
-                caption.text.clone()
-            } else {
-                format!("Figure crop from source page {}", page_index + 1)
-            },
+            alt: caption.text.clone(),
+            placement_hint: caption
+                .text
+                .split_once(':')
+                .map(|(label, _)| format!("{}:", label.trim())),
         });
     }
-    Ok(FigureCrops { images, regions })
+    Ok(FigureCrops {
+        images,
+        regions,
+        text_exclusions,
+    })
 }
 
 fn find_figure_captions(
@@ -534,6 +568,60 @@ fn union_rect(left: Rect, right: Rect) -> Rect {
     let right_edge = (left.x + left.width).max(right.x + right.width);
     let top_edge = (left.y + left.height).max(right.y + right.height);
     Rect::new(x, y, right_edge - x, top_edge - y)
+}
+
+fn tighten_regions_from_graphics(
+    coarse_regions: &[Rect],
+    path_bounds: &[Rect],
+    image_bounds: &[Rect],
+) -> Vec<Rect> {
+    coarse_regions
+        .iter()
+        .filter_map(|coarse| {
+            let mut graphics: Option<Rect> = None;
+            for candidate in path_bounds.iter().chain(image_bounds) {
+                let size_is_local = candidate.width <= coarse.width * 1.2
+                    && candidate.height <= coarse.height * 1.2;
+                if !size_is_local || !rect_center_is_inside(*candidate, *coarse) {
+                    continue;
+                }
+                let Some(clipped) = intersect_rect(*candidate, *coarse) else {
+                    continue;
+                };
+                graphics = Some(graphics.map_or(clipped, |current| union_rect(current, clipped)));
+            }
+            let graphics = graphics?;
+            (graphics.width >= 24.0 && graphics.height >= 24.0)
+                .then(|| intersect_rect(expand_rect(graphics, 2.0), *coarse))
+                .flatten()
+        })
+        .collect()
+}
+
+fn rect_center_is_inside(subject: Rect, region: Rect) -> bool {
+    let center_x = subject.x + subject.width * 0.5;
+    let center_y = subject.y + subject.height * 0.5;
+    center_x >= region.x
+        && center_x <= region.x + region.width
+        && center_y >= region.y
+        && center_y <= region.y + region.height
+}
+
+fn intersect_rect(left: Rect, right: Rect) -> Option<Rect> {
+    let x = left.x.max(right.x);
+    let y = left.y.max(right.y);
+    let right_edge = (left.x + left.width).min(right.x + right.width);
+    let top_edge = (left.y + left.height).min(right.y + right.height);
+    (right_edge > x && top_edge > y).then(|| Rect::new(x, y, right_edge - x, top_edge - y))
+}
+
+fn expand_rect(rect: Rect, amount: f32) -> Rect {
+    Rect::new(
+        rect.x - amount,
+        rect.y - amount,
+        rect.width + amount * 2.0,
+        rect.height + amount * 2.0,
+    )
 }
 
 fn account_asset(total_bytes: &mut usize, bytes: usize, max_bytes: usize) -> Result<(), EpubError> {
@@ -615,6 +703,7 @@ fn collect_page_images(
                 image_index + 1,
                 page_index + 1
             ),
+            placement_hint: None,
         });
     }
 
@@ -656,21 +745,25 @@ fn package_epub(
             "<main class=\"source-page-content\" data-source-page=\"{}\">\n<p class=\"source-page\">Source page {}</p>\n{}",
             page.number, page.number, page.html
         );
-        if !page.images.is_empty() {
+        let mut deferred_images = String::new();
+        for image in page.images {
+            let source = format!("../{}", escape_xml(&image.href));
+            let alt = escape_xml(&image.alt);
+            let placed = image.placement_hint.as_deref().is_some_and(|hint| {
+                replace_caption_paragraph_with_figure(&mut body, hint, &source, &alt)
+            });
+            if !placed {
+                deferred_images.push_str(&format!(
+                    "<figure class=\"figure-fallback\"><img src=\"{source}\" alt=\"{alt}\"/><figcaption>{alt}</figcaption></figure>\n"
+                ));
+            }
+            editor = editor.resource((image.href, image.bytes));
+        }
+        if !deferred_images.is_empty() {
             body.push_str(
                 "<section class=\"page-images\" aria-label=\"Images from this source page\">\n",
             );
-        }
-        for image in page.images {
-            body.push_str(&format!(
-                "<figure><img src=\"../{}\" alt=\"{}\"/><figcaption>{}</figcaption></figure>\n",
-                escape_xml(&image.href),
-                escape_xml(&image.alt),
-                escape_xml(&image.alt)
-            ));
-            editor = editor.resource((image.href, image.bytes));
-        }
-        if body.contains("<section class=\"page-images\"") {
+            body.push_str(&deferred_images);
             body.push_str("</section>\n");
         }
         body.push_str("</main>\n");
@@ -694,6 +787,38 @@ fn package_epub(
         .toc_stylesheet("styles.css")
         .to_vec()
         .map_err(|error| EpubError::Package(error.to_string()))
+}
+
+fn replace_caption_paragraph_with_figure(
+    body: &mut String,
+    caption_marker: &str,
+    image_source: &str,
+    image_alt: &str,
+) -> bool {
+    let mut search_from = 0usize;
+    while let Some(relative_start) = body[search_from..].find("<p") {
+        let paragraph_start = search_from + relative_start;
+        let Some(relative_open_end) = body[paragraph_start..].find('>') else {
+            return false;
+        };
+        let content_start = paragraph_start + relative_open_end + 1;
+        let Some(relative_close) = body[content_start..].find("</p>") else {
+            return false;
+        };
+        let content_end = content_start + relative_close;
+        let paragraph_end = content_end + "</p>".len();
+        let caption_markup = &body[content_start..content_end];
+        let caption_text = strip_markup(caption_markup);
+        if caption_text.trim_start().starts_with(caption_marker) {
+            let figure = format!(
+                "<figure class=\"figure-fallback\"><img src=\"{image_source}\" alt=\"{image_alt}\"/><figcaption>{caption_markup}</figcaption></figure>"
+            );
+            body.replace_range(paragraph_start..paragraph_end, &figure);
+            return true;
+        }
+        search_from = paragraph_end;
+    }
+    false
 }
 
 fn enhance_algorithm_blocks(html: &mut String) {
@@ -1005,6 +1130,40 @@ mod tests {
             (overlap_fraction(image, Rect::new(60.0, 10.0, 100.0, 100.0)) - 0.5).abs()
                 < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn tightens_semantic_exclusion_to_graphic_bounds() {
+        let coarse = Rect::new(59.0, 524.0, 227.0, 225.0);
+        let graphics = tighten_regions_from_graphics(
+            &[coarse],
+            &[
+                Rect::new(60.0, 525.0, 225.0, 72.0),
+                // A page-sized background must not expand the exclusion.
+                Rect::new(0.0, 0.0, 612.0, 792.0),
+            ],
+            &[],
+        );
+        assert_eq!(graphics.len(), 1);
+        assert!(graphics[0].y + graphics[0].height < 600.0);
+        let prose_above_figure = Rect::new(60.0, 650.0, 220.0, 9.0);
+        assert_eq!(overlap_fraction(prose_above_figure, graphics[0]), 0.0);
+    }
+
+    #[test]
+    fn replaces_formatted_caption_with_accessible_figure() {
+        let mut body = "<p>Before Figure 1.</p>\n<p><strong>Figure</strong> <strong>1:</strong> Sample graph</p>\n<p>After.</p>".to_string();
+        assert!(replace_caption_paragraph_with_figure(
+            &mut body,
+            "Figure 1:",
+            "../images/figure.png",
+            "Figure 1: Sample graph"
+        ));
+        assert!(body.contains(
+            "<figure class=\"figure-fallback\"><img src=\"../images/figure.png\" alt=\"Figure 1: Sample graph\"/><figcaption><strong>Figure</strong> <strong>1:</strong> Sample graph</figcaption></figure>"
+        ));
+        assert_eq!(body.matches("Figure</strong> <strong>1:").count(), 1);
+        assert!(body.ends_with("<p>After.</p>"));
     }
 
     #[test]
