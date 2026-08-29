@@ -65,7 +65,7 @@ bun run dev
 
 `bun run build` writes the deployable static site to `web/dist/`. Generated WASM and static output are ignored by source control.
 
-The browser build limits input to 64 MiB and 500 pages, each rendered source page to 24 megapixels, and retained output to 32 megapixels. Conversion is synchronous inside a Web Worker, so **Cancel** terminates the worker without blocking the interface. The source and output live only in browser memory.
+The browser build limits input to 64 MiB and 500 pages, each rendered source page to 24 megapixels, transient uncompressed output to 32 megapixels, and compressed output images to 128 MiB. Conversion is synchronous inside a Web Worker, so **Cancel** terminates the worker without blocking the interface. The source and output live only in browser memory.
 
 ## Cloudflare
 
@@ -119,7 +119,7 @@ PDF bytes ──────────────▶│ paprika-pdf      │
 - [`paprika-wasm`](crates/paprika-wasm) owns browser limits and JavaScript bindings.
 - [`web`](web) is a dependency-light static interface.
 
-The optimizer consumes one source raster at a time. It retains completed output pages because the final PDF is returned as one byte buffer; this is the main memory limit for long or high-resolution documents.
+The optimizer consumes one source raster at a time. Completed output pages are drained and compressed between source pages; only compressed page data is retained until final PDF assembly. This keeps long documents from accumulating full RGB canvases in browser memory.
 
 ## Development
 

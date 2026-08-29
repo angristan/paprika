@@ -155,10 +155,11 @@ pub enum OptimizeError {
     OutputLimit,
 }
 
-/// Incrementally optimizes source pages while retaining only output pages.
+/// Incrementally optimizes source pages while retaining only buffered output pages.
 ///
-/// A caller can render and submit one PDF page at a time, which avoids keeping
-/// every high-resolution source raster in memory.
+/// A caller can render and submit one PDF page at a time, then drain completed
+/// output pages for compression. This avoids retaining source rasters or every
+/// uncompressed output page for the full document.
 pub struct DocumentOptimizer {
     options: OptimizationOptions,
     composer: Composer,
@@ -203,6 +204,14 @@ impl DocumentOptimizer {
             Mode::FitWidth => self.add_fit_width_page(page),
             Mode::FitPage => self.add_fit_page(page),
         }
+    }
+
+    /// Remove completed output pages while preserving the current partial page.
+    ///
+    /// Long-running adapters should call this after each source page and encode
+    /// the returned pages before processing more input.
+    pub fn take_completed_pages(&mut self) -> Vec<RasterPage> {
+        self.composer.take_completed_pages()
     }
 
     pub fn finish(self) -> Result<Vec<RasterPage>, OptimizeError> {
@@ -309,6 +318,7 @@ struct Composer {
     cursor_y: u32,
     line_height: u32,
     dirty: bool,
+    emitted_pages: usize,
     max_pages: Option<usize>,
 }
 
@@ -324,12 +334,18 @@ impl Composer {
             cursor_y: margin,
             line_height: 0,
             dirty: false,
+            emitted_pages: 0,
             max_pages,
         })
     }
 
+    fn take_completed_pages(&mut self) -> Vec<RasterPage> {
+        self.emitted_pages += self.pages.len();
+        std::mem::take(&mut self.pages)
+    }
+
     fn finish(mut self) -> Result<Vec<RasterPage>, OptimizeError> {
-        if self.dirty || self.pages.is_empty() {
+        if self.dirty || (self.pages.is_empty() && self.emitted_pages == 0) {
             self.ensure_page_capacity()?;
             self.pages.push(self.current);
         }
@@ -1078,6 +1094,33 @@ mod tests {
         let output = optimizer.finish().unwrap();
         let rows = dark_rows(&output[0]);
         assert!(rows.last().unwrap() - rows.first().unwrap() > 70);
+    }
+
+    #[test]
+    fn completed_pages_can_be_drained_without_a_trailing_blank_page() {
+        let source = page(
+            100,
+            100,
+            &[Rect {
+                x: 10,
+                y: 10,
+                width: 80,
+                height: 80,
+            }],
+        );
+        let mut optimizer = DocumentOptimizer::new(OptimizationOptions {
+            mode: Mode::FitPage,
+            width: 128,
+            height: 128,
+            margin: 8,
+            ..Default::default()
+        })
+        .unwrap();
+
+        optimizer.add_page(&source).unwrap();
+        assert_eq!(optimizer.take_completed_pages().len(), 1);
+        assert!(optimizer.take_completed_pages().is_empty());
+        assert!(optimizer.finish().unwrap().is_empty());
     }
 
     #[test]

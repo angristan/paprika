@@ -16,12 +16,16 @@ use thiserror::Error;
 const MAX_RASTER_EDGE: u32 = 16_384;
 const NATIVE_SOURCE_PIXEL_LIMIT: u64 = 80_000_000;
 const NATIVE_OUTPUT_PIXEL_LIMIT: u64 = 128_000_000;
+const NATIVE_OUTPUT_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 
 /// Working-set limits for the in-memory raster pipeline.
 #[derive(Clone, Copy, Debug)]
 pub struct PdfLimits {
     pub max_source_pixels_per_page: u64,
+    /// Maximum uncompressed output pixels buffered between source pages.
     pub max_output_pixels: u64,
+    /// Maximum cumulative compressed image bytes before PDF assembly.
+    pub max_output_bytes: usize,
 }
 
 impl PdfLimits {
@@ -29,6 +33,7 @@ impl PdfLimits {
         Self {
             max_source_pixels_per_page: NATIVE_SOURCE_PIXEL_LIMIT,
             max_output_pixels: NATIVE_OUTPUT_PIXEL_LIMIT,
+            max_output_bytes: NATIVE_OUTPUT_BYTE_LIMIT,
         }
     }
 
@@ -38,6 +43,7 @@ impl PdfLimits {
             // crops, so 24 MP can already approach a few hundred MiB.
             max_source_pixels_per_page: 24_000_000,
             max_output_pixels: 32_000_000,
+            max_output_bytes: 128 * 1024 * 1024,
         }
     }
 }
@@ -63,6 +69,8 @@ pub enum PdfError {
     },
     #[error("raster data returned by the PDF renderer was invalid")]
     InvalidRender,
+    #[error("compressed output exceeds the {limit} MiB memory limit")]
+    OutputTooLarge { limit: usize },
     #[error(transparent)]
     Optimize(#[from] OptimizeError),
 }
@@ -93,6 +101,8 @@ pub fn optimize_pdf_with_limits(
     let cache = RenderCache::new();
     let interpreter_settings = InterpreterSettings::default();
     let scale = options.source_dpi as f32 / 72.0;
+    let mut encoded_pages = Vec::new();
+    let mut encoded_bytes = 0;
 
     for (index, page) in pages.iter().enumerate() {
         let (base_width, base_height) = page.render_dimensions();
@@ -132,11 +142,22 @@ pub fn optimize_pdf_with_limits(
             rgb.extend_from_slice(&pixel[..3]);
         }
         optimizer.add_page(&RasterPage::new(width, height, rgb)?)?;
+        append_compressed_pages(
+            optimizer.take_completed_pages(),
+            &mut encoded_pages,
+            &mut encoded_bytes,
+            limits.max_output_bytes,
+        )?;
     }
 
-    let output = optimizer.finish()?;
-    let output_pages = output.len();
-    let bytes = encode_raster_pdf(&output, options.dpi);
+    append_compressed_pages(
+        optimizer.finish()?,
+        &mut encoded_pages,
+        &mut encoded_bytes,
+        limits.max_output_bytes,
+    )?;
+    let output_pages = encoded_pages.len();
+    let bytes = encode_compressed_pdf(encoded_pages, options.dpi);
     Ok(OptimizedPdf {
         bytes,
         source_pages,
@@ -155,7 +176,50 @@ pub fn page_count(input: &[u8]) -> Result<usize, PdfError> {
     }
 }
 
+struct CompressedPage {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+fn append_compressed_pages(
+    pages: Vec<RasterPage>,
+    output: &mut Vec<CompressedPage>,
+    output_bytes: &mut usize,
+    max_output_bytes: usize,
+) -> Result<(), PdfError> {
+    let limit = max_output_bytes / (1024 * 1024);
+    for page in pages {
+        let pixels = compress_to_vec_zlib(&page.pixels, CompressionLevel::DefaultLevel as u8);
+        *output_bytes = output_bytes
+            .checked_add(pixels.len())
+            .ok_or(PdfError::OutputTooLarge { limit })?;
+        if *output_bytes > max_output_bytes {
+            return Err(PdfError::OutputTooLarge { limit });
+        }
+        output.push(CompressedPage {
+            width: page.width,
+            height: page.height,
+            pixels,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn encode_raster_pdf(pages: &[RasterPage], dpi: u32) -> Vec<u8> {
+    let compressed = pages
+        .iter()
+        .map(|page| CompressedPage {
+            width: page.width,
+            height: page.height,
+            pixels: compress_to_vec_zlib(&page.pixels, CompressionLevel::DefaultLevel as u8),
+        })
+        .collect();
+    encode_compressed_pdf(compressed, dpi)
+}
+
+fn encode_compressed_pdf(pages: Vec<CompressedPage>, dpi: u32) -> Vec<u8> {
     let mut pdf = Pdf::new();
     let catalog_id = Ref::new(1);
     let page_tree_id = Ref::new(2);
@@ -167,7 +231,7 @@ fn encode_raster_pdf(pages: &[RasterPage], dpi: u32) -> Vec<u8> {
         .kids(page_ids.iter().copied())
         .count(page_ids.len() as i32);
 
-    for (index, page) in pages.iter().enumerate() {
+    for (index, page) in pages.into_iter().enumerate() {
         let page_id = page_ids[index];
         let image_id = Ref::new(page_id.get() + 1);
         let content_id = Ref::new(page_id.get() + 2);
@@ -185,8 +249,7 @@ fn encode_raster_pdf(pages: &[RasterPage], dpi: u32) -> Vec<u8> {
             .pair(image_name, image_id);
         output_page.finish();
 
-        let compressed = compress_to_vec_zlib(&page.pixels, CompressionLevel::DefaultLevel as u8);
-        let mut image = pdf.image_xobject(image_id, &compressed);
+        let mut image = pdf.image_xobject(image_id, &page.pixels);
         image.filter(Filter::FlateDecode);
         image.width(page.width as i32);
         image.height(page.height as i32);
@@ -249,6 +312,50 @@ mod tests {
         let bottom = &rgba[((17 * 20 + 10) * 4)..][..3];
         assert!(top[0] > top[2], "top half was vertically flipped");
         assert!(bottom[2] > bottom[0], "bottom half was vertically flipped");
+    }
+
+    #[test]
+    fn streams_documents_larger_than_the_raster_buffer_budget() {
+        let input_pages = vec![RasterPage::white(10, 10).unwrap(); 36];
+        let input = encode_raster_pdf(&input_pages, 72);
+        let result = optimize_pdf_with_limits(
+            &input,
+            OptimizationOptions {
+                mode: paprika_core::Mode::FitPage,
+                width: 1_024,
+                height: 1_024,
+                source_dpi: 72,
+                ..Default::default()
+            },
+            PdfLimits::browser(),
+        )
+        .unwrap();
+        assert_eq!(result.source_pages, 36);
+        assert_eq!(result.output_pages, 36);
+        assert_eq!(page_count(&result.bytes).unwrap(), 36);
+    }
+
+    #[test]
+    fn rejects_compressed_output_over_the_byte_budget() {
+        let source = RasterPage::white(20, 20).unwrap();
+        let input = encode_raster_pdf(&[source], 72);
+        let error = optimize_pdf_with_limits(
+            &input,
+            OptimizationOptions {
+                mode: paprika_core::Mode::FitPage,
+                width: 128,
+                height: 128,
+                source_dpi: 72,
+                ..Default::default()
+            },
+            PdfLimits {
+                max_source_pixels_per_page: 1_000_000,
+                max_output_pixels: 1_000_000,
+                max_output_bytes: 1,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, PdfError::OutputTooLarge { .. }));
     }
 
     #[test]
