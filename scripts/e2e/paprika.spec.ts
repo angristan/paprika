@@ -49,11 +49,30 @@ test("keeps the conversion workbench usable at 320 CSS pixels", async ({ page })
   await expect(page.locator("h1")).toBeVisible();
   await expect(page.locator("#source-file")).toBeEnabled();
   await expect(page.locator("#convert")).toBeVisible();
-  const metrics = await page.evaluate(() => ({
-    clientWidth: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth,
-  }));
-  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+  const metrics = await page.evaluate(() => {
+    const clientWidth = document.documentElement.clientWidth;
+    const overflowers = Array.from(document.querySelectorAll("body *"))
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${element.classList.length ? `.${Array.from(element.classList).join(".")}` : ""}`,
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+          width: Math.round(rect.width),
+        };
+      })
+      .filter(({ left, right }) => left < -1 || right > clientWidth + 1)
+      .slice(0, 12);
+    return {
+      clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+      overflowers,
+    };
+  });
+  expect(
+    metrics.scrollWidth,
+    `overflowing elements: ${JSON.stringify(metrics.overflowers)}`,
+  ).toBeLessThanOrEqual(metrics.clientWidth + 1);
 });
 
 test("remains usable at 200 percent zoom", async ({ page }) => {
