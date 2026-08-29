@@ -130,6 +130,7 @@ function showEmptyPreview() {
   epubPreview.releasePageUrls();
   previewFrame.hidden = true;
   previewFrame.removeAttribute("src");
+  previewFrame.setAttribute("sandbox", "allow-same-origin");
   sheet.hidden = false;
   previewControls.hidden = true;
   previewLimit.hidden = true;
@@ -141,11 +142,22 @@ function setSelectedPreviewTab(tab) {
   previewOutput.setAttribute("aria-pressed", String(tab === "output"));
 }
 
+function showPdfPreview(url, title) {
+  // Chrome's built-in PDF viewer refuses to load in a sandboxed frame. PDF
+  // bytes still come only from the user's local file or Paprika's local output.
+  previewFrame.removeAttribute("src");
+  previewFrame.removeAttribute("sandbox");
+  previewFrame.title = title;
+  previewFrame.src = url;
+}
+
 function showSourcePreview() {
   if (!sourceUrl) return;
   epubPreview.releasePageUrls();
-  previewFrame.title = `Source PDF preview — ${selectedFile?.name ?? "selected document"}`;
-  previewFrame.src = sourceUrl;
+  showPdfPreview(
+    sourceUrl,
+    `Source PDF preview — ${selectedFile?.name ?? "selected document"}`,
+  );
   previewFrame.hidden = false;
   sheet.hidden = true;
   previewControls.hidden = true;
@@ -167,8 +179,7 @@ function showOutputPreview(index = epubPreview.chapterIndex) {
 
   if (outputFormat === "pdf") {
     epubPreview.releasePageUrls();
-    previewFrame.title = "Generated PDF preview";
-    previewFrame.src = outputUrl;
+    showPdfPreview(outputUrl, "Generated PDF preview");
     previewControls.hidden = true;
     previewLimit.hidden = true;
     return;

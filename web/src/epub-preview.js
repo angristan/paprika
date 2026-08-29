@@ -85,6 +85,8 @@ export class EpubPreview {
       new Blob([serialized], { type: "application/xhtml+xml" }),
     );
     this.frame.title = `Generated EPUB preview — ${chapter.title}, source page ${chapter.source_page}`;
+    this.frame.removeAttribute("src");
+    this.frame.setAttribute("sandbox", "allow-same-origin");
     this.frame.src = this.documentUrl;
     return chapter;
   }
