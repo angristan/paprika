@@ -1,3 +1,5 @@
+import { EpubPreview } from "./epub-preview.js";
+
 const MAX_BYTES = 64 * 1024 * 1024;
 
 const form = document.querySelector("#job-form");
@@ -22,11 +24,38 @@ const height = document.querySelector("#height");
 const dpi = document.querySelector("#dpi");
 const sheet = document.querySelector("#sheet");
 const dimensions = document.querySelector("#dimensions");
+const previewFrame = document.querySelector("#preview-frame");
+const previewSource = document.querySelector("#preview-source");
+const previewOutput = document.querySelector("#preview-output");
+const previewControls = document.querySelector("#preview-controls");
+const previewPrevious = document.querySelector("#preview-previous");
+const previewNext = document.querySelector("#preview-next");
+const previewPosition = document.querySelector("#preview-position");
+const previewOpen = document.querySelector("#preview-open");
+const previewLimit = document.querySelector("#preview-limit");
 
+const epubPreview = new EpubPreview(previewFrame);
 let selectedFile = null;
-let worker = null;
+let worker = createWorker();
 let activeJob = null;
+let nextJobId = 1;
 let outputUrl = null;
+let sourceUrl = null;
+let outputFormat = null;
+
+function createWorker() {
+  const nextWorker = new Worker("/converter.worker.js", { type: "module" });
+  nextWorker.addEventListener("message", handleWorkerMessage);
+  nextWorker.addEventListener("error", (error) => {
+    if (worker === nextWorker) finishWithError(error.message, true);
+  });
+  return nextWorker;
+}
+
+function resetWorker() {
+  worker?.terminate();
+  worker = null;
+}
 
 function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -44,6 +73,11 @@ function clearSelectedFile() {
   fileFacts.hidden = true;
   convertButton.disabled = true;
   jobNumber.textContent = "No. —";
+  if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+  sourceUrl = null;
+  previewSource.disabled = true;
+  previewOpen.hidden = true;
+  showEmptyPreview();
 }
 
 function setFile(file) {
@@ -66,22 +100,93 @@ function setFile(file) {
     return;
   }
   selectedFile = file;
+  sourceUrl = URL.createObjectURL(file);
   fileName.textContent = file.name;
   fileSize.textContent = formatBytes(file.size);
   fileFacts.hidden = false;
   convertButton.disabled = false;
+  previewSource.disabled = false;
   const fingerprint = `${file.name}:${file.size}:${file.lastModified}`;
   let hash = 0;
   for (const character of fingerprint) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
   jobNumber.textContent = `No. ${String(hash % 10000).padStart(4, "0")}`;
-  setStatus("Ready", "Review the job ticket, then start the local conversion.", "ready");
+  showSourcePreview();
+  setStatus("Ready", "Review the source, then start the local conversion.", "ready");
 }
 
 function clearDownload() {
   if (outputUrl) URL.revokeObjectURL(outputUrl);
   outputUrl = null;
+  outputFormat = null;
   download.hidden = true;
   download.removeAttribute("href");
+  previewOutput.disabled = true;
+  epubPreview.clear();
+  previewLimit.hidden = true;
+  if (sourceUrl) showSourcePreview();
+}
+
+function showEmptyPreview() {
+  epubPreview.releasePageUrls();
+  previewFrame.hidden = true;
+  previewFrame.removeAttribute("src");
+  sheet.hidden = false;
+  previewControls.hidden = true;
+  previewLimit.hidden = true;
+  setSelectedPreviewTab("source");
+}
+
+function setSelectedPreviewTab(tab) {
+  previewSource.setAttribute("aria-pressed", String(tab === "source"));
+  previewOutput.setAttribute("aria-pressed", String(tab === "output"));
+}
+
+function showSourcePreview() {
+  if (!sourceUrl) return;
+  epubPreview.releasePageUrls();
+  previewFrame.title = `Source PDF preview — ${selectedFile?.name ?? "selected document"}`;
+  previewFrame.src = sourceUrl;
+  previewFrame.hidden = false;
+  sheet.hidden = true;
+  previewControls.hidden = true;
+  previewLimit.hidden = true;
+  previewOpen.href = sourceUrl;
+  previewOpen.textContent = "Open source PDF in a new tab";
+  previewOpen.hidden = false;
+  setSelectedPreviewTab("source");
+}
+
+function showOutputPreview(index = epubPreview.chapterIndex) {
+  if (!outputUrl || !outputFormat) return;
+  sheet.hidden = true;
+  previewFrame.hidden = false;
+  previewOpen.href = outputUrl;
+  previewOpen.textContent = "Open generated PDF in a new tab";
+  previewOpen.hidden = outputFormat !== "pdf";
+  setSelectedPreviewTab("output");
+
+  if (outputFormat === "pdf") {
+    epubPreview.releasePageUrls();
+    previewFrame.title = "Generated PDF preview";
+    previewFrame.src = outputUrl;
+    previewControls.hidden = true;
+    previewLimit.hidden = true;
+    return;
+  }
+
+  const chapter = epubPreview.show(index);
+  if (!chapter) {
+    showEmptyPreview();
+    return;
+  }
+  previewControls.hidden = epubPreview.pageCount <= 1;
+  previewPrevious.disabled = epubPreview.chapterIndex === 0;
+  previewNext.disabled = epubPreview.chapterIndex + 1 >= epubPreview.pageCount;
+  previewPosition.textContent = `Preview ${epubPreview.chapterIndex + 1} of ${epubPreview.pageCount} · source page ${chapter.source_page}`;
+  previewLimit.hidden = !epubPreview.truncated;
+  previewLimit.textContent = epubPreview.truncated
+    ? `Preview is limited to ${epubPreview.pageCount} source pages. The download contains the complete EPUB.`
+    : "";
 }
 
 function setJobControlsDisabled(disabled) {
@@ -111,6 +216,7 @@ function updateOutputUI() {
   rasterOptions.hidden = isEpub;
   rasterAnalysis.hidden = isEpub;
   convertButton.textContent = isEpub ? "Make EPUB" : "Make raster PDF";
+  previewOutput.textContent = isEpub ? "Generated EPUB" : "Generated PDF";
   sheet.querySelector("i").textContent = isEpub ? "EPUB" : "PDF";
   formatNote.textContent = isEpub
     ? "Selectable text, reader-controlled type size, and compact output for born-digital PDFs."
@@ -125,6 +231,11 @@ function updateOutputUI() {
     dimensions.textContent = `${output.width} × ${output.height} px · ${output.dpi} dpi`;
   }
 }
+
+previewSource.addEventListener("click", showSourcePreview);
+previewOutput.addEventListener("click", () => showOutputPreview());
+previewPrevious.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex - 1));
+previewNext.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex + 1));
 
 format.addEventListener("change", () => {
   clearDownload();
@@ -169,14 +280,15 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!selectedFile || activeJob) return;
   clearDownload();
-  const outputFormat = format.value;
+  const selectedFormat = format.value;
   const stem = selectedFile.name.replace(/\.pdf$/i, "");
   activeJob = {
+    id: nextJobId++,
     file: selectedFile,
-    format: outputFormat,
+    format: selectedFormat,
     title: stem || "Converted document",
     options: options(),
-    outputName: `${stem || "document"}.paprika.${outputFormat}`,
+    outputName: `${stem || "document"}.paprika.${selectedFormat}`,
   };
   setJobControlsDisabled(true);
   convertButton.disabled = true;
@@ -185,15 +297,14 @@ form.addEventListener("submit", async (event) => {
   setStatus("Opening", "Loading the Rust engine and checking the document…", "working");
 
   const job = activeJob;
-  worker = new Worker("/converter.worker.js", { type: "module" });
-  worker.addEventListener("message", handleWorkerMessage);
-  worker.addEventListener("error", (error) => finishWithError(error.message));
   try {
     const input = await job.file.arrayBuffer();
     if (activeJob !== job) return;
+    worker ??= createWorker();
     worker.postMessage(
       {
         type: "convert",
+        jobId: job.id,
         input,
         format: job.format,
         title: job.title,
@@ -209,8 +320,7 @@ form.addEventListener("submit", async (event) => {
 });
 
 cancelButton.addEventListener("click", () => {
-  worker?.terminate();
-  worker = null;
+  resetWorker();
   activeJob = null;
   progress.hidden = true;
   cancelButton.hidden = true;
@@ -221,12 +331,15 @@ cancelButton.addEventListener("click", () => {
 
 function handleWorkerMessage(event) {
   const message = event.data;
+  if (!activeJob || message.jobId !== activeJob.id) return;
+  if (message.type === "composing") {
+    setStatus("Composing", "Extracting and typesetting locally…", "working");
+    return;
+  }
   if (message.type === "inspected") {
     setStatus(
-      "Composing",
-      message.format === "epub"
-        ? `${message.pages} source page${message.pages === 1 ? "" : "s"} · extracting and typesetting locally…`
-        : `${message.pages} source page${message.pages === 1 ? "" : "s"} · rendering locally…`,
+      "Rendering",
+      `${message.pages} source page${message.pages === 1 ? "" : "s"} · rendering locally…`,
       "working",
     );
     return;
@@ -241,28 +354,67 @@ function handleWorkerMessage(event) {
     const label = isEpub ? "EPUB" : "PDF";
     const blob = new Blob([message.output], { type: mime });
     outputUrl = URL.createObjectURL(blob);
+    outputFormat = message.format;
     download.href = outputUrl;
     download.download = activeJob?.outputName ?? `paprika-output.${message.format}`;
     download.textContent = `Download ${formatBytes(blob.size)} ${label}`;
     download.hidden = false;
-    setStatus("Ready to download", "Conversion finished. The source file was not uploaded.", "success");
-    finishWorker();
+    previewOutput.disabled = false;
+
+    try {
+      if (isEpub) {
+        if (message.preview?.chapters?.length) {
+          epubPreview.setData(message.preview, message.previewAssets ?? []);
+          showOutputPreview(0);
+        } else {
+          previewOutput.disabled = true;
+          showSourcePreview();
+          previewLimit.hidden = false;
+          previewLimit.textContent = "The complete EPUB is ready, but this document exceeded the bounded browser preview.";
+        }
+      } else {
+        showOutputPreview(0);
+      }
+    } catch (error) {
+      previewOutput.disabled = true;
+      showSourcePreview();
+      previewLimit.hidden = false;
+      previewLimit.textContent = `The output is ready, but its embedded preview could not be shown: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    const pageSummary = message.pages
+      ? `${message.pages} source page${message.pages === 1 ? "" : "s"}. `
+      : "";
+    setStatus(
+      "Ready to download",
+      `${pageSummary}Conversion finished locally. The source file was not uploaded.`,
+      "success",
+    );
+    finishJob();
   }
 }
 
-function finishWithError(message) {
+function finishWithError(message, workerFailed = false) {
   setStatus("Could not convert", message || "The conversion failed.", "error");
-  finishWorker();
+  if (workerFailed) resetWorker();
+  finishJob();
 }
 
-function finishWorker() {
-  worker?.terminate();
-  worker = null;
+function finishJob() {
   activeJob = null;
   progress.hidden = true;
   cancelButton.hidden = true;
   setJobControlsDisabled(false);
   convertButton.disabled = !selectedFile;
 }
+
+window.addEventListener("pagehide", (event) => {
+  if (event.persisted) return;
+  worker?.terminate();
+  worker = null;
+  epubPreview.clear();
+  if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+  if (outputUrl) URL.revokeObjectURL(outputUrl);
+});
 
 updateOutputUI();

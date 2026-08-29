@@ -11,7 +11,7 @@ command -v wasm-pack >/dev/null 2>&1 || {
 
 mkdir -p web/dist
 cp web/src/index.html web/src/styles.css web/src/app.js web/src/converter.worker.js \
-  web/src/favicon.svg web/src/_headers web/src/404.html web/dist/
+  web/src/epub-preview.js web/src/favicon.svg web/src/_headers web/src/404.html web/dist/
 
 # Rust already optimizes this release for size. wasm-opt saves about 15% more
 # bytes but adds roughly six minutes on this module, so Cloudflare builds skip
@@ -33,7 +33,7 @@ RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+simd128" \
 # local evidence there. Refuse to deploy unknown or obsolete files instead.
 while IFS= read -r asset; do
   case "$asset" in
-    404.html|_headers|app.js|converter.worker.js|favicon.svg|index.html|styles.css) ;;
+    404.html|_headers|app.js|converter.worker.js|epub-preview.js|favicon.svg|index.html|styles.css) ;;
     pkg/.gitignore|pkg/package.json|pkg/paprika_wasm.d.ts|pkg/paprika_wasm.js) ;;
     pkg/paprika_wasm_bg.wasm|pkg/paprika_wasm_bg.wasm.d.ts) ;;
     *)

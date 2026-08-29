@@ -1082,6 +1082,7 @@ dependencies = [
  "paprika-core",
  "paprika-epub",
  "paprika-pdf",
+ "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
 ]

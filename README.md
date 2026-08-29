@@ -15,7 +15,8 @@ The same Rust pipeline runs in the native CLI and browser WebAssembly app. An ex
 - Headings, lists, links, basic tables, Unicode inline math, embedded images, captioned vector-figure crops, conservative display-equation crops, and visual column fallbacks for math-dense pages
 - One source-page chapter per EPUB spine entry for traceability
 - Native CLI on Linux, macOS, and Windows
-- Browser conversion in a cancellable Web Worker
+- Browser conversion in a cancellable, reusable Web Worker
+- Local source-PDF and generated-EPUB previews in sandboxed browser frames
 - Static Cloudflare deployment with no upload endpoint
 - Experimental raster `fit-width`, `fit-page`, and graphical `reflow` PDF output
 
@@ -60,7 +61,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-`bun run build` writes the deployable static site to `web/dist/`. The browser accepts PDFs up to 64 MiB and 500 pages. EPUB image resources are capped at 56 MiB, semantic XHTML at 24 MiB, and final EPUB output at 96 MiB. Raster mode has separate page and working-memory limits. Conversion is synchronous inside a Web Worker, so **Cancel** terminates the worker without blocking the interface.
+`bun run build` writes the deployable static site to `web/dist/`. The browser accepts PDFs up to 64 MiB and 500 pages. EPUB image resources are capped at 56 MiB, semantic XHTML at 24 MiB, and final EPUB output at 96 MiB. The generated EPUB preview is separately bounded to 12 chapters, 2 MiB of XHTML, 8 MiB of images, and 48 assets; the download always contains the complete result. Raster mode has separate page and working-memory limits. Conversion is synchronous inside a reusable Web Worker, so repeated jobs avoid reloading WebAssembly and **Cancel** can still terminate the worker without blocking the interface.
 
 ## Cloudflare
 

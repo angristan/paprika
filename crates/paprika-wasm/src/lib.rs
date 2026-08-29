@@ -1,5 +1,7 @@
 use paprika_core::OptimizationOptions;
-use paprika_epub::{EpubOptions, convert_pdf_to_epub};
+use paprika_epub::{
+    EpubOptions, EpubPreview, EpubPreviewLimits, convert_pdf_to_epub as convert_epub,
+};
 use wasm_bindgen::prelude::*;
 
 const MAX_BROWSER_INPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -29,14 +31,120 @@ pub fn inspect_pdf(input: &[u8]) -> Result<usize, JsValue> {
     Ok(pages)
 }
 
-/// Convert a born-digital PDF to a reflowable EPUB 3 archive in memory.
-///
-/// The website calls this inside a Web Worker so extraction and packaging do
-/// not block interaction on the main browser thread.
+#[derive(serde::Serialize)]
+struct PreviewManifest<'a> {
+    stylesheet: &'a str,
+    chapters: Vec<PreviewChapter<'a>>,
+    assets: Vec<PreviewAsset<'a>>,
+    truncated: bool,
+}
+
+#[derive(serde::Serialize)]
+struct PreviewChapter<'a> {
+    source_page: usize,
+    title: &'a str,
+    href: &'a str,
+    xhtml: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct PreviewAsset<'a> {
+    index: usize,
+    href: &'a str,
+    media_type: &'a str,
+}
+
+/// Browser-owned EPUB result. Large byte buffers are taken exactly once so
+/// JavaScript can transfer them without base64 or JSON duplication.
 #[wasm_bindgen]
-pub fn convert_pdf_to_epub_bytes(input: &[u8], title: String) -> Result<Vec<u8>, JsValue> {
+pub struct BrowserEpubConversion {
+    output: Option<Vec<u8>>,
+    source_pages: usize,
+    text_pages: usize,
+    image_count: usize,
+    warnings: Vec<String>,
+    preview: Option<EpubPreview>,
+}
+
+#[wasm_bindgen]
+impl BrowserEpubConversion {
+    #[wasm_bindgen(getter)]
+    pub fn source_pages(&self) -> usize {
+        self.source_pages
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn text_pages(&self) -> usize {
+        self.text_pages
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn image_count(&self) -> usize {
+        self.image_count
+    }
+
+    pub fn warnings(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.warnings).map_err(js_error)
+    }
+
+    pub fn preview_manifest(&self) -> Result<JsValue, JsValue> {
+        let Some(preview) = &self.preview else {
+            return Ok(JsValue::NULL);
+        };
+        let manifest = PreviewManifest {
+            stylesheet: &preview.stylesheet,
+            chapters: preview
+                .chapters
+                .iter()
+                .map(|chapter| PreviewChapter {
+                    source_page: chapter.source_page,
+                    title: &chapter.title,
+                    href: &chapter.href,
+                    xhtml: &chapter.xhtml,
+                })
+                .collect(),
+            assets: preview
+                .assets
+                .iter()
+                .enumerate()
+                .map(|(index, asset)| PreviewAsset {
+                    index,
+                    href: &asset.href,
+                    media_type: &asset.media_type,
+                })
+                .collect(),
+            truncated: preview.truncated,
+        };
+        serde_wasm_bindgen::to_value(&manifest).map_err(js_error)
+    }
+
+    pub fn preview_asset_count(&self) -> usize {
+        self.preview
+            .as_ref()
+            .map_or(0, |preview| preview.assets.len())
+    }
+
+    pub fn take_preview_asset(&mut self, index: usize) -> Result<Vec<u8>, JsValue> {
+        let asset = self
+            .preview
+            .as_mut()
+            .and_then(|preview| preview.assets.get_mut(index))
+            .ok_or_else(|| JsValue::from_str("invalid EPUB preview asset index"))?;
+        Ok(std::mem::take(&mut asset.bytes))
+    }
+
+    pub fn take_output(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.output
+            .take()
+            .ok_or_else(|| JsValue::from_str("EPUB output was already transferred"))
+    }
+}
+
+/// Convert a born-digital PDF to EPUB plus a bounded browser preview.
+#[wasm_bindgen]
+pub fn convert_pdf_to_epub(input: &[u8], title: String) -> Result<BrowserEpubConversion, JsValue> {
     enforce_input_limit(input)?;
-    let result = convert_pdf_to_epub(
+    let result = convert_epub(
         input,
         EpubOptions {
             title,
@@ -46,11 +154,24 @@ pub fn convert_pdf_to_epub_bytes(input: &[u8], title: String) -> Result<Vec<u8>,
             max_asset_bytes: 56 * 1024 * 1024,
             max_semantic_bytes: 24 * 1024 * 1024,
             max_output_bytes: 96 * 1024 * 1024,
+            preview_limits: Some(EpubPreviewLimits {
+                max_chapters: 12,
+                max_xhtml_bytes: 2 * 1024 * 1024,
+                max_asset_bytes: 8 * 1024 * 1024,
+                max_assets: 48,
+            }),
             ..Default::default()
         },
     )
     .map_err(js_error)?;
-    Ok(result.bytes)
+    Ok(BrowserEpubConversion {
+        output: Some(result.bytes),
+        source_pages: result.source_pages,
+        text_pages: result.text_pages,
+        image_count: result.image_count,
+        warnings: result.warnings,
+        preview: result.preview,
+    })
 }
 
 /// Produce the legacy raster PDF fallback in memory.

@@ -17,5 +17,6 @@ js-sys.workspace = true
 paprika-core = { path = "../paprika-core" }
 paprika-epub = { path = "../paprika-epub" }
 paprika-pdf = { path = "../paprika-pdf" }
+serde.workspace = true
 serde-wasm-bindgen.workspace = true
 wasm-bindgen.workspace = true

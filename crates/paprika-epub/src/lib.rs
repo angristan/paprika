@@ -16,6 +16,7 @@ use pdf_oxide::layout::{RectFilterMode, TextSpan};
 use pulldown_cmark::{CowStr, Event, Options as MarkdownOptions, Parser, Tag, TagEnd, html};
 use rbook::Epub;
 use rbook::epub::EpubChapter;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use thiserror::Error;
 
@@ -95,6 +96,8 @@ pub struct EpubOptions {
     pub max_semantic_bytes: usize,
     /// Maximum final EPUB archive size.
     pub max_output_bytes: usize,
+    /// Optional bounded browser preview generated from the same semantic pages.
+    pub preview_limits: Option<EpubPreviewLimits>,
 }
 
 impl Default for EpubOptions {
@@ -107,6 +110,7 @@ impl Default for EpubOptions {
             max_asset_bytes: DEFAULT_MAX_ASSET_BYTES,
             max_semantic_bytes: DEFAULT_MAX_SEMANTIC_BYTES,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            preview_limits: None,
         }
     }
 }
@@ -119,6 +123,38 @@ pub struct ConvertedEpub {
     pub text_pages: usize,
     pub image_count: usize,
     pub warnings: Vec<String>,
+    pub preview: Option<EpubPreview>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct EpubPreviewLimits {
+    pub max_chapters: usize,
+    pub max_xhtml_bytes: usize,
+    pub max_asset_bytes: usize,
+    pub max_assets: usize,
+}
+
+#[derive(Debug)]
+pub struct EpubPreview {
+    pub stylesheet: String,
+    pub chapters: Vec<EpubPreviewChapter>,
+    pub assets: Vec<EpubPreviewAsset>,
+    pub truncated: bool,
+}
+
+#[derive(Debug)]
+pub struct EpubPreviewChapter {
+    pub source_page: usize,
+    pub title: String,
+    pub href: String,
+    pub xhtml: String,
+}
+
+#[derive(Debug)]
+pub struct EpubPreviewAsset {
+    pub href: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Error)]
@@ -178,6 +214,12 @@ struct EquationCrops {
     images: Vec<PageImage>,
     text_exclusions: Vec<Rect>,
     asset_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AssetBudget {
+    used: usize,
+    maximum: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -299,7 +341,10 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
         detect_headings: true,
         extract_tables: true,
         include_images: false,
-        strip_running_headers_footers: true,
+        // pdf_oxide's legacy running-header pass rescans every page for every
+        // chapter. Artifact filtering remains enabled without that O(pages²)
+        // pass, and avoids multi-minute conversions on longer documents.
+        strip_running_headers_footers: false,
         reading_order_mode: ReadingOrderMode::ColumnAware,
         expand_ligatures: true,
         include_artifacts: false,
@@ -308,6 +353,7 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
 
     let mut semantic_pages = Vec::with_capacity(page_count);
     let mut warnings = Vec::new();
+    let repeated_running_text = collect_repeated_running_text(&document, page_count);
     let render_document = if options.include_images && input.len() <= MAX_FIGURE_RENDER_INPUT_BYTES
     {
         SourcePdf::new(input.to_vec()).ok()
@@ -327,7 +373,18 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
 
     for page_index in 0..page_count {
         let page_asset_bytes = asset_bytes;
-        let crops = if options.include_images {
+        let page_spans = if options.include_images {
+            document.extract_spans(page_index).unwrap_or_else(|error| {
+                warnings.push(format!(
+                    "Could not inspect positioned text from page {}: {error}",
+                    page_index + 1
+                ));
+                Vec::new()
+            })
+        } else {
+            Vec::new()
+        };
+        let crops = if options.include_images && page_may_have_figure_caption(&page_spans) {
             render_document
                 .as_ref()
                 .map(|source| {
@@ -345,56 +402,60 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
         } else {
             FigureCrops::default()
         };
-        if let Some(source) = render_document.as_ref().filter(|_| options.include_images) {
-            let spans = document.extract_spans(page_index).unwrap_or_default();
-            if is_math_dense_candidate(&spans, &crops.regions) {
-                let mut probe_options = extraction_options.clone();
-                probe_options.exclude_regions = crops.text_exclusions.clone();
-                probe_options.exclude_regions_mode = RectFilterMode::MinOverlap(0.5);
-                let (_, probe_html) = extract_page_xhtml(&document, page_index, &probe_options)?;
-                let should_fallback =
-                    math_extraction_is_unreliable(&spans, &crops.regions, &probe_html);
-                if should_fallback {
-                    let mut fallback_asset_bytes = page_asset_bytes;
-                    let images = collect_formula_page_crops(
-                        source,
-                        &document,
-                        page_index,
-                        &spans,
-                        &mut fallback_asset_bytes,
-                        options.max_asset_bytes,
-                        &mut warnings,
+        if let Some(source) = render_document.as_ref().filter(|_| options.include_images)
+            && is_math_dense_candidate(&page_spans, &crops.regions)
+        {
+            let mut probe_options = extraction_options.clone();
+            probe_options.exclude_regions = crops.text_exclusions.clone();
+            probe_options.exclude_regions_mode = RectFilterMode::MinOverlap(0.5);
+            let (_, probe_html) = extract_page_xhtml(
+                &document,
+                page_index,
+                &probe_options,
+                &repeated_running_text,
+            )?;
+            let should_fallback =
+                math_extraction_is_unreliable(&page_spans, &crops.regions, &probe_html);
+            if should_fallback {
+                let mut fallback_asset_bytes = page_asset_bytes;
+                let images = collect_formula_page_crops(
+                    source,
+                    &document,
+                    page_index,
+                    &page_spans,
+                    &mut fallback_asset_bytes,
+                    options.max_asset_bytes,
+                    &mut warnings,
+                )?;
+                if !images.is_empty() {
+                    let html = format!(
+                        "<p class=\"conversion-note\">Source page {} contains dense mathematical layout that could not be represented reliably as selectable text. It is preserved visually in reading order.</p>\n",
+                        page_index + 1
+                    );
+                    semantic_bytes = semantic_bytes.checked_add(html.len()).ok_or(
+                        EpubError::SemanticTooLarge {
+                            limit: options.max_semantic_bytes / (1024 * 1024),
+                        },
                     )?;
-                    if !images.is_empty() {
-                        let html = format!(
-                            "<p class=\"conversion-note\">Source page {} contains dense mathematical layout that could not be represented reliably as selectable text. It is preserved visually in reading order.</p>\n",
-                            page_index + 1
-                        );
-                        semantic_bytes = semantic_bytes.checked_add(html.len()).ok_or(
-                            EpubError::SemanticTooLarge {
-                                limit: options.max_semantic_bytes / (1024 * 1024),
-                            },
-                        )?;
-                        if semantic_bytes > options.max_semantic_bytes {
-                            return Err(EpubError::SemanticTooLarge {
-                                limit: options.max_semantic_bytes / (1024 * 1024),
-                            });
-                        }
-                        asset_bytes = fallback_asset_bytes;
-                        image_count += images.len();
-                        warnings.push(format!(
+                    if semantic_bytes > options.max_semantic_bytes {
+                        return Err(EpubError::SemanticTooLarge {
+                            limit: options.max_semantic_bytes / (1024 * 1024),
+                        });
+                    }
+                    asset_bytes = fallback_asset_bytes;
+                    image_count += images.len();
+                    warnings.push(format!(
                         "Page {} has dense mathematical layout and was preserved as visual columns.",
                         page_index + 1
                     ));
-                        semantic_pages.push(SemanticPage {
-                            number: page_index + 1,
-                            title: format!("Page {}", page_index + 1),
-                            html,
-                            images,
-                            has_text: false,
-                        });
-                        continue;
-                    }
+                    semantic_pages.push(SemanticPage {
+                        number: page_index + 1,
+                        title: format!("Page {}", page_index + 1),
+                        html,
+                        images,
+                        has_text: false,
+                    });
+                    continue;
                 }
             }
         }
@@ -406,9 +467,12 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
                         source,
                         &document,
                         page_index,
+                        &page_spans,
                         &crops.regions,
-                        asset_bytes,
-                        options.max_asset_bytes,
+                        AssetBudget {
+                            used: asset_bytes,
+                            maximum: options.max_asset_bytes,
+                        },
                         &mut warnings,
                     )
                 })
@@ -423,8 +487,12 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
             .exclude_regions
             .extend(equations.text_exclusions.iter().copied());
         page_extraction_options.exclude_regions_mode = RectFilterMode::MinOverlap(0.5);
-        let (mut markdown, mut html) =
-            extract_page_xhtml(&document, page_index, &page_extraction_options)?;
+        let (mut markdown, mut html) = extract_page_xhtml(
+            &document,
+            page_index,
+            &page_extraction_options,
+            &repeated_running_text,
+        )?;
         if !equation_anchors_are_unique(&html, &equations.images) {
             warnings.push(format!(
                 "Display equations from page {} remained as text because their reading position was ambiguous.",
@@ -432,7 +500,12 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
             ));
             equations = EquationCrops::default();
             page_extraction_options.exclude_regions = crops.text_exclusions.clone();
-            (markdown, html) = extract_page_xhtml(&document, page_index, &page_extraction_options)?;
+            (markdown, html) = extract_page_xhtml(
+                &document,
+                page_index,
+                &page_extraction_options,
+                &repeated_running_text,
+            )?;
         }
         let remaining_semantic_bytes = options.max_semantic_bytes.saturating_sub(semantic_bytes);
         if markdown.len() > remaining_semantic_bytes {
@@ -511,6 +584,10 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
     let title = normalized_title(&options.title);
     let language = normalized_language(&options.language);
     let identifier = document_identifier(input);
+    let preview = options
+        .preview_limits
+        .map(|limits| build_epub_preview(&semantic_pages, &language, limits))
+        .transpose()?;
     let bytes = package_epub(&title, &language, &identifier, semantic_pages)?;
     if bytes.len() > options.max_output_bytes {
         return Err(EpubError::OutputTooLarge {
@@ -524,6 +601,7 @@ pub fn convert_pdf_to_epub(input: &[u8], options: EpubOptions) -> Result<Convert
         text_pages,
         image_count,
         warnings,
+        preview,
     })
 }
 
@@ -1049,6 +1127,15 @@ fn collect_formula_page_crops(
     Ok(images)
 }
 
+fn page_may_have_figure_caption(spans: &[TextSpan]) -> bool {
+    spans.iter().any(|span| {
+        span.text.split_whitespace().any(|word| {
+            let token = word.trim_matches(|character: char| !character.is_alphanumeric());
+            token.eq_ignore_ascii_case("figure") || token.eq_ignore_ascii_case("fig")
+        })
+    })
+}
+
 fn collect_figure_crops(
     source: &SourcePdf,
     document: &PdfDocument,
@@ -1225,9 +1312,9 @@ fn collect_equation_crops(
     source: &SourcePdf,
     document: &PdfDocument,
     page_index: usize,
+    spans: &[TextSpan],
     excluded_regions: &[Rect],
-    existing_asset_bytes: usize,
-    max_asset_bytes: usize,
+    asset_budget: AssetBudget,
     warnings: &mut Vec<String>,
 ) -> Result<EquationCrops, EpubError> {
     if document.get_page_rotation(page_index).unwrap_or(0) != 0 {
@@ -1247,16 +1334,6 @@ fn collect_equation_crops(
         return Ok(EquationCrops::default());
     }
 
-    let spans = match document.extract_spans(page_index) {
-        Ok(spans) => spans,
-        Err(error) => {
-            warnings.push(format!(
-                "Could not inspect equations from page {}: {error}",
-                page_index + 1
-            ));
-            return Ok(EquationCrops::default());
-        }
-    };
     let table_regions: Vec<Rect> = document
         .extract_tables(page_index)
         .map(|tables| tables.into_iter().filter_map(|table| table.bbox).collect())
@@ -1270,7 +1347,7 @@ fn collect_equation_crops(
     veto_regions.extend_from_slice(excluded_regions);
     veto_regions.extend(table_regions);
     veto_regions.extend(image_regions);
-    let plans = find_display_equations(&spans, page_bounds, &veto_regions);
+    let plans = find_display_equations(spans, page_bounds, &veto_regions);
     if plans.is_empty() {
         return Ok(EquationCrops::default());
     }
@@ -1315,7 +1392,7 @@ fn collect_equation_crops(
     let y_scale = height as f32 / page_bounds.height;
     let mut images = Vec::with_capacity(plans.len());
     let mut text_exclusions = Vec::new();
-    let mut cumulative_asset_bytes = existing_asset_bytes;
+    let mut cumulative_asset_bytes = asset_budget.used;
     let mut equation_asset_bytes = 0usize;
     for (index, plan) in plans.into_iter().enumerate() {
         let x = ((plan.render_bbox.x - page_bounds.x) * x_scale)
@@ -1337,14 +1414,14 @@ fn collect_equation_crops(
         }
 
         let crop = image::imageops::crop_imm(&rendered, x, y, crop_width, crop_height).to_image();
-        let remaining_bytes = max_asset_bytes.saturating_sub(cumulative_asset_bytes);
+        let remaining_bytes = asset_budget.maximum.saturating_sub(cumulative_asset_bytes);
         let mut output = BoundedBuffer::new(remaining_bytes);
         if let Err(error) =
             image::DynamicImage::ImageRgba8(crop).write_to(&mut output, image::ImageFormat::Png)
         {
             if output.limit_exceeded {
                 return Err(EpubError::AssetsTooLarge {
-                    limit: max_asset_bytes / (1024 * 1024),
+                    limit: asset_budget.maximum / (1024 * 1024),
                 });
             }
             warnings.push(format!(
@@ -1355,12 +1432,16 @@ fn collect_equation_crops(
             continue;
         }
         let bytes = output.into_inner();
-        account_asset(&mut cumulative_asset_bytes, bytes.len(), max_asset_bytes)?;
+        account_asset(
+            &mut cumulative_asset_bytes,
+            bytes.len(),
+            asset_budget.maximum,
+        )?;
         equation_asset_bytes =
             equation_asset_bytes
                 .checked_add(bytes.len())
                 .ok_or(EpubError::AssetsTooLarge {
-                    limit: max_asset_bytes / (1024 * 1024),
+                    limit: asset_budget.maximum / (1024 * 1024),
                 })?;
         text_exclusions.extend(plan.exclusion_rects);
         images.push(PageImage {
@@ -2140,10 +2221,124 @@ fn overlap_fraction(subject: Rect, region: Rect) -> f32 {
     }
 }
 
+#[derive(Default)]
+struct RepeatedRunningText {
+    headers: HashSet<String>,
+    footers: HashSet<String>,
+}
+
+fn collect_repeated_running_text(document: &PdfDocument, page_count: usize) -> RepeatedRunningText {
+    if page_count < 3 {
+        return RepeatedRunningText::default();
+    }
+    let minimum_occurrences = ((page_count as f32 * 0.6).ceil() as usize).max(2);
+    let mut header_occurrences = HashMap::<String, usize>::new();
+    let mut footer_occurrences = HashMap::<String, usize>::new();
+    for page_index in 0..page_count {
+        let page_height = document
+            .get_page_media_box(page_index)
+            .map(|media| media.3)
+            .unwrap_or(792.0);
+        let Ok(spans) = document.extract_spans(page_index) else {
+            continue;
+        };
+        let mut seen_headers = HashSet::new();
+        let mut seen_footers = HashSet::new();
+        for span in spans {
+            let normalized = normalize_running_text(&span.text);
+            if normalized.len() <= 3 {
+                continue;
+            }
+            if span.bbox.y > page_height * 0.85 && seen_headers.insert(normalized.clone()) {
+                *header_occurrences.entry(normalized.clone()).or_default() += 1;
+            }
+            if span.bbox.y + span.bbox.height < page_height * 0.15
+                && seen_footers.insert(normalized.clone())
+            {
+                *footer_occurrences.entry(normalized).or_default() += 1;
+            }
+        }
+    }
+    let frequent = |occurrences: HashMap<String, usize>| {
+        occurrences
+            .into_iter()
+            .filter_map(|(text, count)| (count >= minimum_occurrences).then_some(text))
+            .collect()
+    };
+    RepeatedRunningText {
+        headers: frequent(header_occurrences),
+        footers: frequent(footer_occurrences),
+    }
+}
+
+fn normalize_running_text(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_ascii_digit())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn strip_repeated_running_html(html: &mut String, repeated: &RepeatedRunningText) {
+    if repeated.headers.is_empty() && repeated.footers.is_empty() {
+        return;
+    }
+    let mut blocks = Vec::new();
+    for tag in ["p", "h1", "h2", "h3", "h4", "h5", "h6"] {
+        let opening = format!("<{tag}");
+        let closing = format!("</{tag}>");
+        let mut search_from = 0usize;
+        while let Some(relative_start) = html[search_from..].find(&opening) {
+            let start = search_from + relative_start;
+            let Some(relative_open_end) = html[start..].find('>') else {
+                break;
+            };
+            let content_start = start + relative_open_end + 1;
+            let Some(relative_close) = html[content_start..].find(&closing) else {
+                break;
+            };
+            let content_end = content_start + relative_close;
+            let end = content_end + closing.len();
+            let normalized =
+                normalize_running_text(&strip_markup(&html[content_start..content_end]));
+            blocks.push((start, end, normalized));
+            search_from = end;
+        }
+    }
+    blocks.sort_unstable_by_key(|block| block.0);
+    let mut removals = Vec::new();
+    let mut removed_headers = HashSet::new();
+    for (index, (start, end, normalized)) in blocks.iter().enumerate() {
+        if index < 2
+            && repeated.headers.contains(normalized)
+            && removed_headers.insert(normalized.clone())
+        {
+            removals.push((*start, *end));
+        }
+    }
+    let mut removed_footers = HashSet::new();
+    for (index, (start, end, normalized)) in blocks.iter().enumerate().rev() {
+        if index.saturating_add(2) >= blocks.len()
+            && repeated.footers.contains(normalized)
+            && removed_footers.insert(normalized.clone())
+        {
+            removals.push((*start, *end));
+        }
+    }
+    removals.sort_unstable();
+    removals.dedup();
+    for (start, end) in removals.into_iter().rev() {
+        html.replace_range(start..end, "");
+    }
+}
+
 fn extract_page_xhtml(
     document: &PdfDocument,
     page_index: usize,
     options: &ConversionOptions,
+    repeated_running_text: &RepeatedRunningText,
 ) -> Result<(String, String), EpubError> {
     let markdown =
         document
@@ -2153,6 +2348,7 @@ fn extract_page_xhtml(
                 message: error.to_string(),
             })?;
     let mut html = markdown_to_xhtml(&markdown);
+    strip_repeated_running_html(&mut html, repeated_running_text);
     strip_invalid_xml_characters(&mut html);
     Ok((markdown, html))
 }
@@ -2174,6 +2370,135 @@ fn equation_anchors_are_unique(html: &str, images: &[PageImage]) -> bool {
     true
 }
 
+fn render_semantic_page_body(page: &SemanticPage) -> Result<String, EpubError> {
+    let mut body = format!(
+        "<main class=\"source-page-content\" data-source-page=\"{}\">\n<p class=\"source-page\">Source page {}</p>\n{}",
+        page.number, page.number, page.html
+    );
+    let mut deferred_images = String::new();
+    for image in &page.images {
+        let source = format!("../{}", escape_xml(&image.href));
+        let alt = escape_xml(&image.alt);
+        let visual_page_fallback = matches!(&image.placement, ImagePlacement::VisualPageFallback);
+        let placed = match &image.placement {
+            ImagePlacement::Caption(marker) => {
+                replace_caption_paragraph_with_figure(&mut body, marker, &source, &alt)
+            }
+            ImagePlacement::EquationAnchor(anchor) => {
+                replace_equation_anchor_with_image(&mut body, anchor, &source, &alt)
+            }
+            ImagePlacement::VisualPageFallback | ImagePlacement::EndOfPage => false,
+        };
+        if !placed {
+            if matches!(&image.placement, ImagePlacement::EquationAnchor(_)) {
+                // Equation text was removed only after this anchor was
+                // validated. Fail closed if packaging sees a different
+                // chapter instead of silently dropping mathematical content.
+                return Err(EpubError::Package(format!(
+                    "validated equation anchor disappeared from source page {}",
+                    page.number
+                )));
+            }
+            if visual_page_fallback {
+                deferred_images.push_str(&format!(
+                    "<figure class=\"visual-page-fallback\"><img src=\"{source}\" alt=\"{alt}\"/></figure>\n"
+                ));
+            } else {
+                deferred_images.push_str(&format!(
+                    "<figure class=\"figure-fallback\"><img src=\"{source}\" alt=\"{alt}\"/><figcaption>{alt}</figcaption></figure>\n"
+                ));
+            }
+        }
+    }
+    if !deferred_images.is_empty() {
+        body.push_str(
+            "<section class=\"page-images\" aria-label=\"Images from this source page\">\n",
+        );
+        body.push_str(&deferred_images);
+        body.push_str("</section>\n");
+    }
+    body.push_str("</main>\n");
+    Ok(body)
+}
+
+fn build_epub_preview(
+    pages: &[SemanticPage],
+    language: &str,
+    limits: EpubPreviewLimits,
+) -> Result<EpubPreview, EpubError> {
+    let mut chapters = Vec::new();
+    let mut assets = Vec::new();
+    let mut xhtml_bytes = 0usize;
+    let mut asset_bytes = 0usize;
+
+    for page in pages.iter().take(limits.max_chapters) {
+        let estimated_markup_bytes = page
+            .images
+            .iter()
+            .map(|image| {
+                image
+                    .href
+                    .len()
+                    .saturating_add(image.alt.len())
+                    .saturating_mul(6)
+                    .saturating_add(512)
+            })
+            .sum::<usize>()
+            .saturating_add(page.html.len())
+            .saturating_add(page.title.len().saturating_mul(6))
+            .saturating_add(1024);
+        if xhtml_bytes.saturating_add(estimated_markup_bytes) > limits.max_xhtml_bytes {
+            break;
+        }
+        let page_asset_bytes = page
+            .images
+            .iter()
+            .map(|image| image.bytes.len())
+            .sum::<usize>();
+        let next_asset_bytes = asset_bytes.saturating_add(page_asset_bytes);
+        if next_asset_bytes > limits.max_asset_bytes
+            || assets.len().saturating_add(page.images.len()) > limits.max_assets
+        {
+            break;
+        }
+
+        let body = render_semantic_page_body(page)?;
+        let xhtml = xhtml_document(&page.title, language, &body);
+        let next_xhtml_bytes = xhtml_bytes.saturating_add(xhtml.len());
+        if next_xhtml_bytes > limits.max_xhtml_bytes {
+            break;
+        }
+        xhtml_bytes = next_xhtml_bytes;
+        asset_bytes = next_asset_bytes;
+        chapters.push(EpubPreviewChapter {
+            source_page: page.number,
+            title: page.title.clone(),
+            href: format!("text/page-{:04}.xhtml", page.number),
+            xhtml,
+        });
+        assets.extend(page.images.iter().map(|image| EpubPreviewAsset {
+            href: image.href.clone(),
+            media_type: image_media_type(&image.href).to_string(),
+            bytes: image.bytes.clone(),
+        }));
+    }
+
+    Ok(EpubPreview {
+        stylesheet: EPUB_CSS.to_string(),
+        truncated: chapters.len() < pages.len(),
+        chapters,
+        assets,
+    })
+}
+
+fn image_media_type(href: &str) -> &'static str {
+    if href.ends_with(".jpg") || href.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "image/png"
+    }
+}
+
 fn package_epub(
     title: &str,
     language: &str,
@@ -2192,55 +2517,10 @@ fn package_epub(
 
     for page in pages {
         let chapter_href = format!("text/page-{:04}.xhtml", page.number);
-        let mut body = format!(
-            "<main class=\"source-page-content\" data-source-page=\"{}\">\n<p class=\"source-page\">Source page {}</p>\n{}",
-            page.number, page.number, page.html
-        );
-        let mut deferred_images = String::new();
+        let body = render_semantic_page_body(&page)?;
         for image in page.images {
-            let source = format!("../{}", escape_xml(&image.href));
-            let alt = escape_xml(&image.alt);
-            let visual_page_fallback =
-                matches!(&image.placement, ImagePlacement::VisualPageFallback);
-            let placed = match &image.placement {
-                ImagePlacement::Caption(marker) => {
-                    replace_caption_paragraph_with_figure(&mut body, marker, &source, &alt)
-                }
-                ImagePlacement::EquationAnchor(anchor) => {
-                    replace_equation_anchor_with_image(&mut body, anchor, &source, &alt)
-                }
-                ImagePlacement::VisualPageFallback | ImagePlacement::EndOfPage => false,
-            };
-            if !placed {
-                if matches!(image.placement, ImagePlacement::EquationAnchor(_)) {
-                    // Equation text was removed only after this anchor was
-                    // validated. Fail closed if packaging sees a different
-                    // chapter instead of silently dropping mathematical content.
-                    return Err(EpubError::Package(format!(
-                        "validated equation anchor disappeared from source page {}",
-                        page.number
-                    )));
-                }
-                if visual_page_fallback {
-                    deferred_images.push_str(&format!(
-                        "<figure class=\"visual-page-fallback\"><img src=\"{source}\" alt=\"{alt}\"/></figure>\n"
-                    ));
-                } else {
-                    deferred_images.push_str(&format!(
-                        "<figure class=\"figure-fallback\"><img src=\"{source}\" alt=\"{alt}\"/><figcaption>{alt}</figcaption></figure>\n"
-                    ));
-                }
-            }
             editor = editor.resource((image.href, image.bytes));
         }
-        if !deferred_images.is_empty() {
-            body.push_str(
-                "<section class=\"page-images\" aria-label=\"Images from this source page\">\n",
-            );
-            body.push_str(&deferred_images);
-            body.push_str("</section>\n");
-        }
-        body.push_str("</main>\n");
 
         let xhtml = xhtml_document(title, language, &body);
         let chapter_title = if page.has_text {
@@ -2257,7 +2537,9 @@ fn package_epub(
 
     editor
         .write()
-        .compression(9)
+        // Moderate compression keeps image-heavy EPUBs compact without the
+        // disproportionate CPU cost of the previous maximum setting.
+        .compression(6)
         .toc_stylesheet("styles.css")
         .to_vec()
         .map_err(|error| EpubError::Package(error.to_string()))
@@ -2703,6 +2985,31 @@ mod tests {
     }
 
     #[test]
+    fn prefilters_varied_figure_caption_tokens() {
+        assert!(page_may_have_figure_caption(&[test_span(
+            "FIGURE 2: Sample",
+            10.0,
+            10.0,
+            100.0,
+            "Times",
+        )]));
+        assert!(page_may_have_figure_caption(&[test_span(
+            "Figure: 2 Sample",
+            10.0,
+            10.0,
+            100.0,
+            "Times",
+        )]));
+        assert!(!page_may_have_figure_caption(&[test_span(
+            "Configuration details",
+            10.0,
+            10.0,
+            100.0,
+            "Times",
+        )]));
+    }
+
+    #[test]
     fn detects_formula_heavy_pages_without_overreacting_to_equations() {
         let mut dense = Vec::new();
         for index in 0..190 {
@@ -3031,6 +3338,19 @@ mod tests {
     }
 
     #[test]
+    fn strips_precomputed_running_headers_from_xhtml() {
+        let repeated = RepeatedRunningText {
+            headers: HashSet::from(["journal title".to_string()]),
+            footers: HashSet::from(["copyright".to_string()]),
+        };
+        let mut html = "<p>Journal Title 12</p>\n<p>Journal Title 99</p>\n<p>Introduction.</p>\n<p>Keep this body paragraph.</p>\n<p>Copyright 2025</p>\n<p>Copyright 2026</p>".to_string();
+        strip_repeated_running_html(&mut html, &repeated);
+        assert_eq!(html.matches("Journal Title").count(), 1);
+        assert_eq!(html.matches("Copyright").count(), 1);
+        assert!(html.contains("Keep this body paragraph."));
+    }
+
+    #[test]
     fn formats_algorithm_steps_as_selectable_lines() {
         let mut html = "<p><strong>Algorithm</strong> <strong>2:</strong> Worker <strong>1 do</strong> work</p>\n<p><strong>2</strong> done **</p>\n<p>Ordinary prose.</p>".to_string();
         enhance_algorithm_blocks(&mut html);
@@ -3053,6 +3373,42 @@ mod tests {
         assert!(xhtml.contains("<title>A &amp; B</title>"));
         assert!(xhtml.contains("xmlns=\"http://www.w3.org/1999/xhtml\""));
         assert!(xhtml.contains("<p>Body</p>"));
+    }
+
+    #[test]
+    fn builds_bounded_preview_from_packaged_page_model() {
+        let page = SemanticPage {
+            number: 3,
+            title: "Formula page".to_string(),
+            html: "<p>Readable context.</p>".to_string(),
+            images: vec![PageImage {
+                href: "images/page-0003-equation-01.png".to_string(),
+                bytes: vec![1, 2, 3],
+                alt: "Display equation".to_string(),
+                placement: ImagePlacement::EndOfPage,
+            }],
+            has_text: true,
+        };
+        let preview = build_epub_preview(
+            &[page],
+            "en",
+            EpubPreviewLimits {
+                max_chapters: 1,
+                max_xhtml_bytes: 4096,
+                max_asset_bytes: 4096,
+                max_assets: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.chapters.len(), 1);
+        assert_eq!(preview.assets.len(), 1);
+        assert_eq!(preview.assets[0].bytes, [1, 2, 3]);
+        assert!(
+            preview.chapters[0]
+                .xhtml
+                .contains("../images/page-0003-equation-01.png")
+        );
+        assert!(!preview.truncated);
     }
 
     #[test]

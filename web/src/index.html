@@ -27,7 +27,7 @@
         <h1 id="title">Make stubborn PDFs readable.</h1>
         <p>
           Paprika extracts selectable text, follows reading order, and makes a compact EPUB
-          for your e-reader or phone. The document stays in this browser tab.
+          for your e-reader or phone. Preview both documents here; they stay in this browser tab.
         </p>
       </section>
 
@@ -135,15 +135,27 @@
 
         <aside class="proof" aria-labelledby="proof-title">
           <div class="proof-heading">
-            <h2 id="proof-title">Output preview</h2>
+            <h2 id="proof-title">Document preview</h2>
             <output id="dimensions">Reflowable EPUB · selectable text</output>
           </div>
-          <div class="sheet-stage" aria-hidden="true">
-            <div id="sheet" class="sheet">
+          <div class="preview-tabs" role="group" aria-label="Document preview">
+            <button id="preview-source" class="preview-tab" type="button" aria-pressed="true" disabled>Source PDF</button>
+            <button id="preview-output" class="preview-tab" type="button" aria-pressed="false" disabled>Generated EPUB</button>
+          </div>
+          <div id="preview-stage" class="sheet-stage">
+            <div id="sheet" class="sheet" aria-hidden="true">
               <span></span><span></span><span></span><span></span><span></span>
               <i>EPUB</i>
             </div>
+            <iframe id="preview-frame" title="Document preview" sandbox="allow-same-origin" referrerpolicy="no-referrer" hidden></iframe>
           </div>
+          <div id="preview-controls" class="preview-controls" hidden>
+            <button id="preview-previous" class="preview-nav" type="button">Previous</button>
+            <output id="preview-position" aria-live="polite"></output>
+            <button id="preview-next" class="preview-nav" type="button">Next</button>
+          </div>
+          <a id="preview-open" class="preview-open" href="#" target="_blank" rel="noopener" hidden>Open PDF in a new tab</a>
+          <p id="preview-limit" class="preview-limit" hidden></p>
           <div id="status" class="status" role="status" aria-live="polite">
             <span class="status-label">Waiting</span>
             <p>Select a PDF to prepare a local conversion.</p>
@@ -161,9 +173,9 @@
         <h2 id="scope-title">What Paprika preserves</h2>
         <p>
           Born-digital text stays selectable and reflows to your reader settings. Paprika detects
-          columns, headings, lists, tables, links, and embedded images. Equations, vector diagrams,
-          unusual layouts, and scanned pages can still need the experimental raster PDF fallback;
-          OCR is not included yet.
+          columns, headings, lists, tables, links, embedded images, and confidently detected
+          equations. Math-dense pages use visual reading-order fallbacks instead of corrupted text.
+          Scanned pages still need OCR, which is not included yet.
         </p>
       </section>
     </main>

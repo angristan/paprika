@@ -2,14 +2,14 @@
 
 - Audience · people reading papers and documents on small screens
 - Job · turn a local born-digital PDF into a compact, reflowable EPUB
-- Primary action · choose a PDF, convert locally, download EPUB
+- Primary action · choose a PDF, preview it, convert locally, inspect the result, download EPUB
 - Fallback · explicitly experimental raster PDF for scans or difficult layouts
 - Real content · file identity, page count, output type, processing state, limitations
 - Constraints · private and local-only, CPU-heavy WASM, keyboard/touch use, 320 px width
 
-- Objects · one source document, one output format, one output document
+- Objects · one source document, one output format, one output document, one local preview surface
 - Active scope · the file selected in this browser tab
-- Critical states · empty, ready, processing, success, failure, canceled
+- Critical states · empty, source preview, processing, output preview, failure, canceled
 - Consequential actions · local conversion and output download; neither changes the source
 
 - Feel: print-workshop, direct, trustworthy
