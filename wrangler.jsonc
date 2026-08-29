@@ -5,6 +5,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "paprika.stanislas.cloud",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./web/dist",
     "html_handling": "auto-trailing-slash",

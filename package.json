@@ -5,6 +5,7 @@
   "packageManager": "bun@1.4.0",
   "scripts": {
     "build": "bash scripts/build-web.sh",
+    "build:cloudflare": "bash scripts/build-web-cloudflare.sh",
     "dev": "bun run build && wrangler dev",
     "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
     "check": "bun run check:rust && bun run build && wrangler deploy --dry-run",

@@ -1,5 +1,7 @@
 # Paprika
 
+**[Use Paprika in your browser →](https://paprika.stanislas.cloud)**
+
 Paprika repaginates PDFs for e-readers and phones. It trims margins, detects one- or two-column reading order, and wraps rasterized words onto a device-sized page.
 
 The same Rust pipeline runs as a native CLI and as WebAssembly in a local-only browser app. The static website can be hosted with Cloudflare Workers Static Assets; documents are not uploaded.
@@ -67,7 +69,7 @@ The browser build limits input to 64 MiB and 500 pages, each rendered source pag
 
 ## Cloudflare
 
-[`wrangler.jsonc`](wrangler.jsonc) defines a static-only Worker. No Worker script, binding, secret, or storage resource is required.
+[`wrangler.jsonc`](wrangler.jsonc) defines a static-only Worker at [`paprika.stanislas.cloud`](https://paprika.stanislas.cloud). No Worker script, binding, secret, or storage resource is required.
 
 Validate without a remote change:
 
@@ -80,6 +82,8 @@ Deploy to the configured Cloudflare account only after reviewing the Worker name
 ```bash
 bun run deploy
 ```
+
+Cloudflare Workers Builds watches `main`. It runs `bun run build:cloudflare`, which installs the pinned Rust and wasm-pack toolchain in the ephemeral build environment, followed by `bun run wrangler deploy`. The wasm-pack release archive is verified with SHA-256 before use.
 
 ## Architecture
 
