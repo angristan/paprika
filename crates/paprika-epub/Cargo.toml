@@ -6,11 +6,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 bytemuck.workspace = true
 hayro.workspace = true
 image = { workspace = true, features = ["png"] }
+language-tags.workspace = true
 pdf_oxide.workspace = true
 pulldown-cmark.workspace = true
 rbook.workspace = true

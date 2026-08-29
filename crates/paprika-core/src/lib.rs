@@ -149,6 +149,8 @@ pub enum OptimizeError {
     DimensionsTooLarge,
     #[error("failed to construct an image buffer")]
     ImageBuffer,
+    #[error("blit rectangle exceeds raster bounds")]
+    BlitOutOfBounds,
     #[error(
         "output exceeds the configured memory budget; reduce page dimensions or process fewer pages"
     )]
@@ -346,16 +348,19 @@ impl Composer {
 
     fn finish(mut self) -> Result<Vec<RasterPage>, OptimizeError> {
         if self.dirty || (self.pages.is_empty() && self.emitted_pages == 0) {
-            self.ensure_page_capacity()?;
+            // Moving the active canvas into the result does not retain another
+            // raster, so it cannot increase the pixel working set.
             self.pages.push(self.current);
         }
         Ok(self.pages)
     }
 
-    fn ensure_page_capacity(&self) -> Result<(), OptimizeError> {
+    fn ensure_replacement_capacity(&self) -> Result<(), OptimizeError> {
+        // The active canvas is retained alongside every completed page. A
+        // replacement therefore needs one more slot than pages.len().
         if self
             .max_pages
-            .is_some_and(|limit| self.pages.len() >= limit)
+            .is_some_and(|limit| self.pages.len().saturating_add(1) >= limit)
         {
             Err(OptimizeError::OutputLimit)
         } else {
@@ -365,12 +370,10 @@ impl Composer {
 
     fn fresh_page(&mut self) -> Result<(), OptimizeError> {
         if self.dirty {
-            self.ensure_page_capacity()?;
+            self.ensure_replacement_capacity()?;
             let replacement = RasterPage::white(self.options.width, self.options.height)?;
             self.pages
                 .push(std::mem::replace(&mut self.current, replacement));
-        } else {
-            self.current = RasterPage::white(self.options.width, self.options.height)?;
         }
         self.cursor_x = self.options.margin;
         self.cursor_y = self.options.margin;
@@ -422,11 +425,17 @@ impl Composer {
         let scale = target_height as f32 / source_line_height.max(1) as f32;
         let mut width = ((source_rect.width as f32 * scale).round() as u32).max(1);
         let mut height = ((source_rect.height as f32 * scale).round() as u32).max(1);
-        let available = self.options.content_width();
-        if width > available {
-            let fit = available as f32 / width as f32;
-            width = available;
-            height = ((height as f32 * fit).round() as u32).max(1);
+        let available_width = self.options.content_width();
+        let available_height = self.options.content_height();
+        if width > available_width || height > available_height {
+            let fit = (available_width as f32 / width as f32)
+                .min(available_height as f32 / height as f32);
+            width = ((width as f32 * fit).round() as u32)
+                .max(1)
+                .min(available_width);
+            height = ((height as f32 * fit).round() as u32)
+                .max(1)
+                .min(available_height);
         }
 
         let gap = (target_height / 4).max(2);
@@ -813,6 +822,28 @@ fn blit_scaled(
     destination_width: u32,
     destination_height: u32,
 ) -> Result<(), OptimizeError> {
+    let source_in_bounds = source_rect.width > 0
+        && source_rect.height > 0
+        && source_rect
+            .x
+            .checked_add(source_rect.width)
+            .is_some_and(|right| right <= source.width)
+        && source_rect
+            .y
+            .checked_add(source_rect.height)
+            .is_some_and(|bottom| bottom <= source.height);
+    let destination_in_bounds = destination_width > 0
+        && destination_height > 0
+        && destination_x
+            .checked_add(destination_width)
+            .is_some_and(|right| right <= destination.width)
+        && destination_y
+            .checked_add(destination_height)
+            .is_some_and(|bottom| bottom <= destination.height);
+    if !source_in_bounds || !destination_in_bounds {
+        return Err(OptimizeError::BlitOutOfBounds);
+    }
+
     let mut crop = Vec::with_capacity(pixel_bytes(source_rect.width, source_rect.height)?);
     for y in source_rect.y..source_rect.bottom() {
         let start = ((y * source.width + source_rect.x) * 3) as usize;
@@ -829,17 +860,11 @@ fn blit_scaled(
         FilterType::Triangle,
     );
     for y in 0..destination_height {
-        if destination_y + y >= destination.height {
-            break;
-        }
         let source_start = (y * destination_width * 3) as usize;
         let source_end = source_start + (destination_width * 3) as usize;
         let destination_start =
             (((destination_y + y) * destination.width + destination_x) * 3) as usize;
         let destination_end = destination_start + (destination_width * 3) as usize;
-        if destination_end > destination.pixels.len() {
-            break;
-        }
         destination.pixels[destination_start..destination_end]
             .copy_from_slice(&resized.as_raw()[source_start..source_end]);
     }
@@ -1124,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn output_pixel_budget_fails_before_another_page_is_retained() {
+    fn output_pixel_budget_counts_the_active_canvas() {
         let source = page(
             100,
             100,
@@ -1143,12 +1168,122 @@ mod tests {
             ..Default::default()
         };
         let mut optimizer =
-            DocumentOptimizer::new_with_output_pixel_limit(options, Some(128_u64 * 128)).unwrap();
+            DocumentOptimizer::new_with_output_pixel_limit(options, Some(2 * 128_u64 * 128))
+                .unwrap();
         optimizer.add_page(&source).unwrap();
         assert!(matches!(
             optimizer.add_page(&source),
             Err(OptimizeError::OutputLimit)
         ));
+    }
+
+    #[test]
+    fn draining_completed_pages_releases_pixel_budget() {
+        let source = page(
+            100,
+            100,
+            &[Rect {
+                x: 10,
+                y: 10,
+                width: 80,
+                height: 80,
+            }],
+        );
+        let options = OptimizationOptions {
+            mode: Mode::FitPage,
+            width: 128,
+            height: 128,
+            margin: 8,
+            ..Default::default()
+        };
+        let mut optimizer =
+            DocumentOptimizer::new_with_output_pixel_limit(options, Some(2 * 128_u64 * 128))
+                .unwrap();
+
+        optimizer.add_page(&source).unwrap();
+        assert_eq!(optimizer.take_completed_pages().len(), 1);
+        optimizer.add_page(&source).unwrap();
+    }
+
+    #[test]
+    fn oversized_words_fit_inside_both_canvas_dimensions() {
+        let source = page(
+            100,
+            200,
+            &[Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 200,
+            }],
+        );
+        let options = OptimizationOptions {
+            width: 128,
+            height: 128,
+            margin: 8,
+            dpi: 600,
+            font_size: 72.0,
+            ..Default::default()
+        };
+        options.validate().unwrap();
+        let mut composer = Composer::new(options, None).unwrap();
+
+        composer
+            .place_word(
+                &source,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 200,
+                },
+                200,
+            )
+            .unwrap();
+
+        let rows = dark_rows(&composer.current);
+        assert_eq!(rows.first(), Some(&8));
+        assert_eq!(rows.last(), Some(&119));
+        assert!(
+            (120..composer.current.height)
+                .all(|y| (0..composer.current.width)
+                    .all(|x| composer.current.luminance(x, y) == 255))
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_blits_fail_without_modifying_the_destination() {
+        let source = page(
+            4,
+            4,
+            &[Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            }],
+        );
+        let mut destination = RasterPage::white(4, 4).unwrap();
+        let original = destination.clone();
+
+        let error = blit_scaled(
+            &source,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            },
+            &mut destination,
+            1,
+            0,
+            4,
+            4,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, OptimizeError::BlitOutOfBounds));
+        assert_eq!(destination, original);
     }
 
     #[test]

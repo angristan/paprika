@@ -2,9 +2,9 @@
 
 **[Convert a PDF in your browser →](https://paprika.stanislas.cloud)**
 
-Paprika turns born-digital PDFs into compact, reflowable EPUB 3 books for e-readers and phones. Text stays selectable, font size is controlled by the reader, and the document never leaves your device.
+Paprika turns born-digital PDFs into compact, reflowable EPUB 3 books for e-readers and phones. Text stays selectable, font size is controlled by the reader, and the browser app does not upload document bytes.
 
-The same Rust pipeline runs in the native CLI and browser WebAssembly app. An experimental raster PDF mode remains available for scans and layouts that semantic extraction cannot reconstruct safely.
+The same Rust pipeline runs in the native CLI and browser WebAssembly app. An experimental raster PDF mode remains available for scans and layouts that semantic extraction cannot reconstruct safely. See the precise [privacy and data-handling boundary](docs/privacy.md).
 
 > Paprika is an early clean-room implementation inspired by the workflow of [k2pdfopt](https://www.willus.com/k2pdfopt/). It does not aim for command-line or output compatibility.
 
@@ -16,7 +16,7 @@ The same Rust pipeline runs in the native CLI and browser WebAssembly app. An ex
 - One source-page chapter per EPUB spine entry for traceability
 - Native CLI on Linux, macOS, and Windows
 - Browser conversion in a cancellable, reusable Web Worker
-- Local source-PDF and generated-EPUB previews in sandboxed browser frames
+- Local source-PDF previews through the browser PDF viewer and sanitized, sandboxed generated-EPUB previews
 - Static Cloudflare deployment with no upload endpoint
 - Experimental raster `fit-width`, `fit-page`, and graphical `reflow` PDF output
 
@@ -48,9 +48,9 @@ Run `paprika --help` for the complete option list. Existing output is never repl
 
 Prerequisites:
 
-- Rust 1.92 or newer with the `wasm32-unknown-unknown` target
-- `wasm-pack` 0.15 or newer
-- Bun 1.4 or newer
+- Rust 1.97.1 with the `wasm32-unknown-unknown` target (pinned by `rust-toolchain.toml`)
+- `wasm-pack` 0.15.0
+- Bun 1.4.0
 
 On Arch Linux:
 
@@ -61,7 +61,7 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-`bun run build` writes the deployable static site to `web/dist/`. The browser accepts PDFs up to 64 MiB and 500 pages. EPUB image resources are capped at 56 MiB, semantic XHTML at 24 MiB, and final EPUB output at 96 MiB. The generated EPUB preview is separately bounded to 12 chapters, 2 MiB of XHTML, 8 MiB of images, and 48 assets; the download always contains the complete result. Raster mode has separate page and working-memory limits. Conversion is synchronous inside a reusable Web Worker, so repeated jobs avoid reloading WebAssembly and **Cancel** can still terminate the worker without blocking the interface.
+`bun run build` writes the complete deployable static site, including both license files, to `web/dist/`. The browser accepts PDFs up to 64 MiB and 500 pages. EPUB image resources are capped at 56 MiB, semantic XHTML at 24 MiB, and final EPUB output at 96 MiB. The generated EPUB preview is separately bounded to 12 chapters, 2 MiB of XHTML, 8 MiB of images, and 48 assets; the download always contains the complete result. Raster mode has separate page and working-memory limits. Conversion is synchronous inside a Web Worker, so **Cancel** can terminate it without blocking the interface. Small successive jobs reuse the initialized worker briefly; large or idle jobs recycle it because WebAssembly linear memory cannot shrink.
 
 ## Cloudflare
 
@@ -70,9 +70,11 @@ bun run dev
 Cloudflare Workers Builds watches `main`:
 
 - Build: `bun run build:cloudflare`
-- Deploy: `bun run wrangler deploy`
+- Deploy: `bun run deploy`
 
-The build bootstrap installs pinned Rust and wasm-pack versions and verifies the wasm-pack archive checksum. Release builds use Rust's size optimization but skip the costly final `wasm-opt` pass; set `PAPRIKA_WASM_OPT=1` only when the smallest possible bundle is worth the extra build time.
+The deploy command only uploads the already-built `web/dist/`; it does not rebuild. The build bootstrap verifies pinned `rustup-init` and wasm-pack binaries before execution. It keeps Rust/Cargo data in Cloudflare's cached Bun directory and reuses a WASM package only when its complete Rust-input fingerprint and stored checksums match. Release builds use Rust's size optimization but skip the costly final `wasm-opt` pass; set `PAPRIKA_WASM_OPT=1` only when the smallest possible bundle is worth the extra build time.
+
+See [release, smoke-test, and rollback procedures](docs/release.md).
 
 ## Architecture
 
@@ -105,14 +107,25 @@ bun install --frozen-lockfile
 bun run check
 ```
 
-Rust-only validation:
+All Cargo commands use `Cargo.lock`. The full release gate also requires Java 17 or newer, wasm-pack 0.15.0, and Playwright's Chromium, Firefox, and WebKit engines:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo check -p paprika-wasm --target wasm32-unknown-unknown
+bun run playwright install chromium firefox webkit
+bun run predeploy
+bun run test:e2e
 ```
+
+Focused validation:
+
+```bash
+bun run check:rust   # rustfmt, Clippy, and workspace tests
+bun run check:wasm   # wasm32 compilation
+bun run check:js     # parse and bundle browser modules
+bun run check:fuzz   # compile the bounded parser/layout fuzz harnesses
+bun run check:epub   # convert a checksum-pinned fixture and run EPUBCheck 5.3.0
+```
+
+The GitHub pre-deploy workflow runs the full gate and Chromium, Firefox, and WebKit smoke tests for pull requests and `main`. Browser tests always start a fresh local Wrangler server on `127.0.0.1`; they cannot silently test the production site.
 
 For a representative multi-column regression, convert [`QuiCK.pdf`](https://www.foundationdb.org/files/QuiCK.pdf) and verify that Algorithm 2 precedes Algorithm 3 in source page 8, all chapter XHTML remains parseable, and output stays well below the source PDF size.
 

@@ -3,186 +3,303 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f3ecdd" />
+    <meta name="theme-color" content="#f3f3f0" />
     <meta
       name="description"
-      content="Convert PDFs to compact, reflowable EPUB books locally in your browser."
+      content="Convert born-digital PDFs to compact, reflowable EPUB books locally in your browser."
     />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/styles.css" />
-    <title>Paprika — local PDF to EPUB</title>
+    <title>Paprika | Convert PDF to EPUB locally</title>
   </head>
   <body>
-    <header class="masthead">
+    <header class="site-header">
       <a class="wordmark" href="/" aria-label="Paprika home">
         <span class="mark" aria-hidden="true">P</span>
         <span>Paprika</span>
       </a>
-      <p>PDF to EPUB press · browser edition</p>
+      <p>Files stay on this device</p>
     </header>
 
-    <main>
-      <section class="intro" aria-labelledby="title">
-        <p class="eyebrow">Small-screen typesetting</p>
-        <h1 id="title">Make stubborn PDFs readable.</h1>
+    <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false">
+      <section class="task-intro" aria-labelledby="page-title">
+        <h1 id="page-title">Turn a PDF into a book that fits.</h1>
         <p>
-          Paprika extracts selectable text, follows reading order, and makes a compact EPUB
-          for your e-reader or phone. Preview both documents here; they stay in this browser tab.
+          Choose a born-digital PDF. Paprika rebuilds its reading flow as a compact EPUB,
+          with a local preview before you download.
         </p>
       </section>
 
-      <section class="workbench" aria-label="PDF conversion workbench">
-        <form id="job-form" class="job-ticket">
-          <div class="ticket-heading">
-            <span>Job ticket</span>
-            <span id="job-number">No. —</span>
+      <section class="workbench" aria-labelledby="workbench-title">
+        <header class="workbench-header">
+          <div>
+            <h2 id="workbench-title">Conversion workbench</h2>
+            <p id="flow-label">Waiting for a source PDF</p>
           </div>
+          <ol class="conversion-route" aria-label="Conversion progress">
+            <li id="route-source" data-state="current">
+              <span>Source</span>
+              <strong>PDF</strong>
+            </li>
+            <li id="route-compose" data-state="pending">
+              <span>Compose</span>
+              <strong>Local</strong>
+            </li>
+            <li id="route-result" data-state="pending">
+              <span>Result</span>
+              <strong id="route-result-format">EPUB</strong>
+            </li>
+          </ol>
+        </header>
 
-          <label id="drop-zone" class="drop-zone" for="source-file">
-            <input id="source-file" type="file" accept="application/pdf,.pdf" />
-            <span class="drop-title">Choose a PDF</span>
-            <span class="drop-help">or drop one here · 64 MiB maximum</span>
-          </label>
+        <div class="workbench-body">
+          <form id="job-form" class="job-panel">
+            <section class="source-fields" aria-labelledby="source-title">
+              <div class="section-heading">
+                <h3 id="source-title">Source</h3>
+                <span>64 MiB · 500 pages max</span>
+              </div>
 
-          <div id="file-facts" class="file-facts" hidden>
-            <span id="file-name"></span>
-            <span id="file-size"></span>
-          </div>
+              <label id="drop-zone" class="drop-zone" for="source-file">
+                <input id="source-file" type="file" accept="application/pdf,.pdf" />
+                <span id="drop-title" class="drop-title">Choose a PDF</span>
+                <span id="drop-help" class="drop-help">or drop one here</span>
+              </label>
 
-          <fieldset>
-            <legend>Output</legend>
-            <label>
-              Format
-              <select id="format" name="format">
-                <option value="epub">Reflowable EPUB · recommended</option>
-                <option value="pdf">Raster PDF · experimental</option>
-              </select>
-            </label>
-            <p id="format-note" class="format-note">
-              Selectable text, reader-controlled type size, and compact output for born-digital PDFs.
-            </p>
-            <div id="raster-options" class="raster-options" hidden>
+              <div id="file-facts" class="file-facts" hidden>
+                <span id="file-name"></span>
+                <span id="file-size"></span>
+              </div>
+            </section>
+
+            <fieldset class="output-fields">
+              <legend>Output</legend>
               <label>
-                Raster layout
-                <select id="mode" name="mode">
-                  <option value="fit-width">Fit width</option>
-                  <option value="fit-page">Fit page</option>
-                  <option value="reflow">Graphical reflow · lossy</option>
+                Format
+                <select id="format" name="format">
+                  <option value="epub">Reflowable EPUB · recommended</option>
+                  <option value="pdf">Raster PDF · experimental</option>
                 </select>
               </label>
-              <label>
-                Device
-                <select id="preset" name="preset">
-                  <option value="758x1024x167">Kindle 6″ · 758 × 1024</option>
-                  <option value="1072x1448x300">Kindle Paperwhite · 1072 × 1448</option>
-                  <option value="1080x1440x265">Kobo Libra · 1080 × 1440</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label>
-              <div class="field-pair">
+              <p id="format-note" class="field-note">
+                Selectable text and reader-controlled type size for born-digital PDFs.
+              </p>
+
+              <div id="epub-options" class="epub-options">
                 <label>
-                  Width <span>px</span>
-                  <input id="width" name="width" type="number" min="128" max="8192" value="758" />
+                  Book title
+                  <input
+                    id="book-title"
+                    name="bookTitle"
+                    type="text"
+                    maxlength="300"
+                    autocomplete="off"
+                    required
+                    placeholder="Derived from the PDF file name"
+                  />
                 </label>
                 <label>
-                  Height <span>px</span>
-                  <input id="height" name="height" type="number" min="128" max="8192" value="1024" />
+                  Language
+                  <input
+                    id="book-language"
+                    name="bookLanguage"
+                    type="text"
+                    value="en"
+                    maxlength="35"
+                    pattern="[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*"
+                    title="Use a BCP 47 language tag such as en, fr, or pt-BR"
+                    list="language-suggestions"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    aria-describedby="language-help"
+                    required
+                  />
+                </label>
+                <datalist id="language-suggestions">
+                  <option value="en"></option>
+                  <option value="en-GB"></option>
+                  <option value="fr"></option>
+                  <option value="de"></option>
+                  <option value="es"></option>
+                  <option value="it"></option>
+                  <option value="pt-BR"></option>
+                  <option value="ja"></option>
+                  <option value="zh-Hans"></option>
+                </datalist>
+                <p id="language-help" class="field-note">
+                  Use a BCP 47 language tag, such as en, fr, or pt-BR.
+                </p>
+              </div>
+
+              <div id="raster-options" class="raster-options" hidden>
+                <label>
+                  Raster layout
+                  <select id="mode" name="mode">
+                    <option value="fit-width">Fit width</option>
+                    <option value="fit-page">Fit page</option>
+                    <option value="reflow">Graphical reflow · lossy</option>
+                  </select>
+                </label>
+                <label>
+                  Device
+                  <select id="preset" name="preset">
+                    <option value="758x1024x167">Kindle 6″ · 758 × 1024</option>
+                    <option value="1072x1448x300">Kindle Paperwhite · 1072 × 1448</option>
+                    <option value="1080x1440x265">Kobo Libra · 1080 × 1440</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                <div class="field-pair">
+                  <label>
+                    Width <span>px</span>
+                    <input id="width" name="width" type="number" min="128" max="8192" value="758" />
+                  </label>
+                  <label>
+                    Height <span>px</span>
+                    <input id="height" name="height" type="number" min="128" max="8192" value="1024" />
+                  </label>
+                </div>
+                <div class="field-pair">
+                  <label>
+                    Margin <span>px</span>
+                    <input id="margin" name="margin" type="number" min="0" max="512" value="24" />
+                  </label>
+                  <label>
+                    Text size <span>pt</span>
+                    <input id="font-size" name="fontSize" type="number" min="4" max="72" step="0.5" value="12" />
+                  </label>
+                </div>
+              </div>
+            </fieldset>
+
+            <details id="raster-analysis" class="advanced-options" hidden>
+              <summary>Raster analysis options</summary>
+              <div class="advanced-fields">
+                <label>
+                  Output resolution <span>dpi</span>
+                  <input id="dpi" name="dpi" type="number" min="36" max="600" value="167" />
+                </label>
+                <label>
+                  Render resolution <span>dpi</span>
+                  <input id="source-dpi" name="sourceDpi" type="number" min="36" max="600" value="144" />
+                </label>
+                <label>
+                  White threshold
+                  <input id="threshold" name="threshold" type="number" min="1" max="255" value="245" />
+                </label>
+                <label>
+                  Maximum columns
+                  <select id="columns" name="columns">
+                    <option value="2">Detect up to 2</option>
+                    <option value="1">Single column</option>
+                  </select>
                 </label>
               </div>
-              <div class="field-pair">
-                <label>
-                  Margin <span>px</span>
-                  <input id="margin" name="margin" type="number" min="0" max="512" value="24" />
-                </label>
-                <label>
-                  Text size <span>pt</span>
-                  <input id="font-size" name="fontSize" type="number" min="4" max="72" step="0.5" value="12" />
-                </label>
+            </details>
+
+            <div class="actions">
+              <button id="convert" type="submit" disabled>Make EPUB</button>
+              <button id="cancel" class="secondary-button" type="button" hidden>Cancel</button>
+            </div>
+          </form>
+
+          <aside class="preview-panel" aria-labelledby="preview-title">
+            <div class="preview-heading">
+              <div>
+                <h3 id="preview-title">Preview</h3>
+                <output id="dimensions">Reflowable EPUB · selectable text</output>
+              </div>
+              <div class="preview-tabs" role="group" aria-label="Document preview">
+                <button id="preview-source" class="preview-tab" type="button" aria-pressed="true" disabled>
+                  Source PDF
+                </button>
+                <button id="preview-output" class="preview-tab" type="button" aria-pressed="false" disabled>
+                  Result EPUB
+                </button>
               </div>
             </div>
-          </fieldset>
 
-          <details id="raster-analysis" hidden>
-            <summary>Raster source analysis</summary>
-            <div class="advanced-fields">
-              <label>
-                Output resolution <span>dpi</span>
-                <input id="dpi" name="dpi" type="number" min="36" max="600" value="167" />
-              </label>
-              <label>
-                Render resolution <span>dpi</span>
-                <input id="source-dpi" name="sourceDpi" type="number" min="36" max="600" value="144" />
-              </label>
-              <label>
-                White threshold
-                <input id="threshold" name="threshold" type="number" min="1" max="255" value="245" />
-              </label>
-              <label>
-                Maximum columns
-                <select id="columns" name="columns">
-                  <option value="2">Detect up to 2</option>
-                  <option value="1">Single column</option>
-                </select>
-              </label>
+            <div id="status" class="status" role="status" aria-live="polite">
+              <span class="status-label">Waiting</span>
+              <p>Select a PDF to prepare a local conversion.</p>
+              <progress id="progress" hidden></progress>
             </div>
-          </details>
 
-          <div class="actions">
-            <button id="convert" type="submit" disabled>Make EPUB</button>
-            <button id="cancel" class="quiet-button" type="button" hidden>Cancel</button>
-          </div>
-        </form>
+            <details id="diagnostics" class="diagnostics" hidden>
+              <summary>Conversion diagnostics</summary>
+              <p>This report omits document names and contents.</p>
+              <pre id="diagnostic-text" tabindex="0"></pre>
+              <div class="diagnostic-actions">
+                <button id="copy-diagnostic" class="secondary-button" type="button">Copy diagnostic</button>
+                <output id="copy-status" aria-live="polite"></output>
+              </div>
+            </details>
 
-        <aside class="proof" aria-labelledby="proof-title">
-          <div class="proof-heading">
-            <h2 id="proof-title">Document preview</h2>
-            <output id="dimensions">Reflowable EPUB · selectable text</output>
-          </div>
-          <div class="preview-tabs" role="group" aria-label="Document preview">
-            <button id="preview-source" class="preview-tab" type="button" aria-pressed="true" disabled>Source PDF</button>
-            <button id="preview-output" class="preview-tab" type="button" aria-pressed="false" disabled>Generated EPUB</button>
-          </div>
-          <div id="preview-stage" class="sheet-stage">
-            <div id="sheet" class="sheet" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span>
-              <i>EPUB</i>
+            <div id="preview-stage" class="preview-stage">
+              <div id="sheet" class="sheet-placeholder" aria-hidden="true">
+                <div class="source-page"><span></span><span></span><span></span><span></span></div>
+                <div class="flow-arrow"></div>
+                <div class="reader-page"><span></span><span></span><span></span><span></span><span></span></div>
+              </div>
+              <iframe
+                id="preview-frame"
+                title="Document preview"
+                sandbox="allow-same-origin"
+                referrerpolicy="no-referrer"
+                hidden
+              ></iframe>
             </div>
-            <iframe id="preview-frame" title="Document preview" sandbox="allow-same-origin" referrerpolicy="no-referrer" hidden></iframe>
-          </div>
-          <div id="preview-controls" class="preview-controls" hidden>
-            <button id="preview-previous" class="preview-nav" type="button">Previous</button>
-            <output id="preview-position" aria-live="polite"></output>
-            <button id="preview-next" class="preview-nav" type="button">Next</button>
-          </div>
-          <a id="preview-open" class="preview-open" href="#" target="_blank" rel="noopener" hidden>Open PDF in a new tab</a>
-          <p id="preview-limit" class="preview-limit" hidden></p>
-          <div id="status" class="status" role="status" aria-live="polite">
-            <span class="status-label">Waiting</span>
-            <p>Select a PDF to prepare a local conversion.</p>
-            <progress id="progress" hidden></progress>
-          </div>
-          <a id="download" class="download" href="#" download hidden>Download output</a>
-          <p class="privacy-note">
-            <strong>Private by construction.</strong> There is no upload endpoint. Closing this tab
-            clears the working document from browser memory.
-          </p>
-        </aside>
+            <div id="preview-controls" class="preview-controls" hidden>
+              <button id="preview-previous" class="preview-nav" type="button">Previous</button>
+              <output id="preview-position" aria-live="polite"></output>
+              <button id="preview-next" class="preview-nav" type="button">Next</button>
+            </div>
+            <a id="preview-open" class="preview-open" href="#" target="_blank" rel="noopener noreferrer" hidden>
+              Open PDF in a new tab
+            </a>
+            <p id="preview-limit" class="preview-limit" hidden></p>
+
+            <section id="result-summary" class="result-summary" aria-labelledby="result-title" hidden>
+              <div class="result-heading">
+                <h3 id="result-title">Conversion report</h3>
+                <span id="warning-count"></span>
+              </div>
+              <dl id="result-counts" class="result-counts">
+                <div>
+                  <dt>Source pages</dt>
+                  <dd id="source-page-count">—</dd>
+                </div>
+                <div>
+                  <dt>Text pages</dt>
+                  <dd id="text-page-count">—</dd>
+                </div>
+                <div>
+                  <dt>Images kept</dt>
+                  <dd id="image-count">—</dd>
+                </div>
+              </dl>
+              <div id="warning-groups" class="warning-groups"></div>
+            </section>
+
+            <a id="download" class="download" href="#" download hidden>Download output</a>
+          </aside>
+        </div>
       </section>
 
       <section class="scope" aria-labelledby="scope-title">
-        <h2 id="scope-title">What Paprika preserves</h2>
+        <h2 id="scope-title">Designed for readable source documents</h2>
         <p>
-          Born-digital text stays selectable and reflows to your reader settings. Paprika detects
-          columns, headings, lists, tables, links, embedded images, and confidently detected
-          equations. Math-dense pages use visual reading-order fallbacks instead of corrupted text.
-          Scanned pages still need OCR, which is not included yet.
+          Paprika preserves selectable text, reading order, headings, lists, tables, links,
+          useful images, and confidently detected equations. Scanned pages still need OCR,
+          which is not included. Raster PDF remains an experimental fallback for visual layouts.
         </p>
       </section>
     </main>
 
     <footer>
-      <span>Paprika runs on Rust and WebAssembly.</span>
-      <span>Local-only · no upload</span>
+      <span>Documents are never uploaded; normal static-site requests remain visible to your network and Cloudflare.</span>
+      <span>Working URLs and state are released on normal unload; browser and OS memory retention is outside Paprika’s control.</span>
     </footer>
 
     <script type="module" src="/app.js"></script>

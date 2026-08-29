@@ -1,14 +1,22 @@
 import { EpubPreview } from "./epub-preview.js";
 
 const MAX_BYTES = 64 * 1024 * 1024;
+const SIMD_PROBE = Uint8Array.of(
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+  0x03, 0x02, 0x01, 0x00,
+  0x0a, 0x09, 0x01, 0x07, 0x00, 0x41, 0x00, 0xfd, 0x0f, 0x1a, 0x0b,
+);
 
+const appShell = document.querySelector("#app-shell");
 const form = document.querySelector("#job-form");
 const fileInput = document.querySelector("#source-file");
 const dropZone = document.querySelector("#drop-zone");
+const dropTitle = document.querySelector("#drop-title");
+const dropHelp = document.querySelector("#drop-help");
 const fileFacts = document.querySelector("#file-facts");
 const fileName = document.querySelector("#file-name");
 const fileSize = document.querySelector("#file-size");
-const jobNumber = document.querySelector("#job-number");
 const convertButton = document.querySelector("#convert");
 const cancelButton = document.querySelector("#cancel");
 const download = document.querySelector("#download");
@@ -16,6 +24,9 @@ const status = document.querySelector("#status");
 const progress = document.querySelector("#progress");
 const format = document.querySelector("#format");
 const formatNote = document.querySelector("#format-note");
+const epubOptions = document.querySelector("#epub-options");
+const bookTitle = document.querySelector("#book-title");
+const bookLanguage = document.querySelector("#book-language");
 const rasterOptions = document.querySelector("#raster-options");
 const rasterAnalysis = document.querySelector("#raster-analysis");
 const preset = document.querySelector("#preset");
@@ -33,28 +44,151 @@ const previewNext = document.querySelector("#preview-next");
 const previewPosition = document.querySelector("#preview-position");
 const previewOpen = document.querySelector("#preview-open");
 const previewLimit = document.querySelector("#preview-limit");
+const resultSummary = document.querySelector("#result-summary");
+const warningCount = document.querySelector("#warning-count");
+const sourcePageCount = document.querySelector("#source-page-count");
+const textPageCount = document.querySelector("#text-page-count");
+const imageCount = document.querySelector("#image-count");
+const warningGroups = document.querySelector("#warning-groups");
+const diagnostics = document.querySelector("#diagnostics");
+const diagnosticText = document.querySelector("#diagnostic-text");
+const copyDiagnosticButton = document.querySelector("#copy-diagnostic");
+const copyStatus = document.querySelector("#copy-status");
+const flowLabel = document.querySelector("#flow-label");
+const routeSource = document.querySelector("#route-source");
+const routeCompose = document.querySelector("#route-compose");
+const routeResult = document.querySelector("#route-result");
+const routeResultFormat = document.querySelector("#route-result-format");
 
 const epubPreview = new EpubPreview(previewFrame);
 let selectedFile = null;
-let worker = createWorker();
+let worker = null;
+let workerRecycleTimer = null;
 let activeJob = null;
 let nextJobId = 1;
 let outputUrl = null;
 let sourceUrl = null;
 let outputFormat = null;
 
-function createWorker() {
-  const nextWorker = new Worker("/converter.worker.js", { type: "module" });
+class BrowserFailure extends Error {
+  constructor(code, stage, userMessage, causeName = "Error") {
+    super(userMessage);
+    this.name = "BrowserFailure";
+    this.code = code;
+    this.stage = stage;
+    this.causeName = causeName;
+  }
+}
+
+function hasWasmSimd() {
+  try {
+    return typeof WebAssembly === "object" && WebAssembly.validate(SIMD_PROBE);
+  } catch {
+    return false;
+  }
+}
+
+function createBrowserFailure(code, stage, userMessage, error) {
+  const causeName = error instanceof Error ? error.name : "Error";
+  return new BrowserFailure(code, stage, userMessage, causeName);
+}
+
+function ensureWorker() {
+  if (workerRecycleTimer) {
+    window.clearTimeout(workerRecycleTimer);
+    workerRecycleTimer = null;
+  }
+  if (worker) return worker;
+  if (!("Worker" in window)) {
+    throw new BrowserFailure(
+      "worker-unavailable",
+      "worker-constructor",
+      "This browser cannot run a local conversion worker. Use a current browser or the Paprika CLI.",
+      "UnsupportedFeature",
+    );
+  }
+  if (typeof WebAssembly !== "object") {
+    throw new BrowserFailure(
+      "wasm-unavailable",
+      "engine-bootstrap",
+      "WebAssembly is disabled or unavailable. Enable it, reload, and try again.",
+      "UnsupportedFeature",
+    );
+  }
+  if (!hasWasmSimd()) {
+    throw new BrowserFailure(
+      "wasm-simd-unsupported",
+      "engine-bootstrap",
+      "This browser does not support the WebAssembly SIMD required by Paprika. Use a current browser or the CLI.",
+      "UnsupportedFeature",
+    );
+  }
+
+  let nextWorker;
+  try {
+    nextWorker = new Worker(new URL("./converter.worker.js", import.meta.url), {
+      type: "module",
+      name: "paprika-converter",
+    });
+  } catch (error) {
+    throw createBrowserFailure(
+      "worker-constructor-failed",
+      "worker-constructor",
+      "The browser could not start the local conversion worker. Reload and try again.",
+      error,
+    );
+  }
+
+  worker = nextWorker;
   nextWorker.addEventListener("message", handleWorkerMessage);
-  nextWorker.addEventListener("error", (error) => {
-    if (worker === nextWorker) finishWithError(error.message, true);
+  nextWorker.addEventListener("error", (event) => {
+    event.preventDefault();
+    if (worker !== nextWorker) return;
+    resetWorker(nextWorker);
+    if (!activeJob) return;
+    finishWithError(
+      createBrowserFailure(
+        "worker-runtime-error",
+        "worker-runtime",
+        "The local conversion worker stopped unexpectedly. Your source is still selected; retry the conversion.",
+        event.error ?? new Error(event.message || "Worker error"),
+      ),
+    );
+  });
+  nextWorker.addEventListener("messageerror", () => {
+    if (worker !== nextWorker) return;
+    resetWorker(nextWorker);
+    if (!activeJob) return;
+    finishWithError(
+      new BrowserFailure(
+        "worker-message-error",
+        "worker-message",
+        "The browser could not read the conversion result. Your source is still selected; retry the conversion.",
+        "DataCloneError",
+      ),
+    );
   });
   return nextWorker;
 }
 
-function resetWorker() {
-  worker?.terminate();
-  worker = null;
+function resetWorker(target = worker) {
+  if (workerRecycleTimer) window.clearTimeout(workerRecycleTimer);
+  workerRecycleTimer = null;
+  target?.terminate();
+  if (worker === target) worker = null;
+}
+
+function scheduleWorkerRecycle(sourceSize) {
+  if (!worker) return;
+  if (workerRecycleTimer) window.clearTimeout(workerRecycleTimer);
+  // WebAssembly linear memory cannot shrink. Release large conversion heaps
+  // immediately and smaller idle heaps after a short reuse window.
+  const delay = sourceSize >= 16 * 1024 * 1024 ? 0 : 60_000;
+  const target = worker;
+  workerRecycleTimer = window.setTimeout(() => {
+    workerRecycleTimer = null;
+    if (!activeJob && worker === target) resetWorker(target);
+  }, delay);
 }
 
 function formatBytes(bytes) {
@@ -68,69 +202,147 @@ function setStatus(label, message, state = "idle") {
   status.querySelector("p").textContent = message;
 }
 
+function setFlow(state) {
+  const routeStates = {
+    empty: ["current", "pending", "pending"],
+    ready: ["done", "current", "pending"],
+    working: ["done", "current", "pending"],
+    success: ["done", "done", "done"],
+    error: ["done", "error", "pending"],
+  }[state] ?? ["current", "pending", "pending"];
+  const currentStep = state === "success" ? 2 : state === "empty" ? 0 : 1;
+  [routeSource, routeCompose, routeResult].forEach((step, index) => {
+    step.dataset.state = routeStates[index];
+    if (index === currentStep) {
+      step.setAttribute("aria-current", "step");
+    } else {
+      step.removeAttribute("aria-current");
+    }
+  });
+
+  const labels = {
+    empty: "Waiting for a source PDF",
+    ready: "Source ready · conversion stays in this tab",
+    working: "Composing the result locally",
+    success: "Result ready to review and download",
+    error: "Conversion stopped · source remains selected",
+  };
+  flowLabel.textContent = labels[state] ?? labels.empty;
+  routeSource.querySelector("span").textContent = state === "empty" ? "Source" : "Selected";
+  routeCompose.querySelector("span").textContent = state === "working"
+    ? "Working"
+    : state === "success"
+      ? "Composed"
+      : state === "error"
+        ? "Stopped"
+        : "Compose";
+  routeResult.querySelector("span").textContent = state === "success" ? "Ready" : "Result";
+}
+
+function blankPreviewFrame() {
+  previewFrame.hidden = true;
+  previewFrame.src = "about:blank";
+  previewFrame.setAttribute("sandbox", "allow-same-origin");
+  previewFrame.title = "Document preview";
+}
+
+function releaseSourceUrl() {
+  if (!sourceUrl) return;
+  URL.revokeObjectURL(sourceUrl);
+  sourceUrl = null;
+}
+
 function clearSelectedFile() {
+  blankPreviewFrame();
+  epubPreview.clear();
+  releaseSourceUrl();
   selectedFile = null;
   fileFacts.hidden = true;
   convertButton.disabled = true;
-  jobNumber.textContent = "No. —";
-  if (sourceUrl) URL.revokeObjectURL(sourceUrl);
-  sourceUrl = null;
   previewSource.disabled = true;
   previewOpen.hidden = true;
+  dropTitle.textContent = "Choose a PDF";
+  dropHelp.textContent = "or drop one here";
+  appShell.dataset.hasFile = "false";
+  appShell.dataset.hasOutput = "false";
   showEmptyPreview();
 }
 
 function setFile(file) {
   if (activeJob) return;
   clearDownload();
+  clearDiagnostics();
   clearSelectedFile();
+  fileInput.value = "";
   if (!file) {
+    setFlow("empty");
     setStatus("Waiting", "Select a PDF to prepare a local conversion.");
     return;
   }
+  if (file.size === 0) {
+    setFlow("error");
+    setStatus("Empty file", "Choose a PDF that contains document data.", "error");
+    return;
+  }
   if (file.size > MAX_BYTES) {
-    fileInput.value = "";
+    setFlow("error");
     setStatus("Too large", "Use the CLI for PDFs larger than 64 MiB.", "error");
     return;
   }
   const looksLikePdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   if (!looksLikePdf) {
-    fileInput.value = "";
+    setFlow("error");
     setStatus("Wrong file", "Paprika currently accepts PDF documents only.", "error");
     return;
   }
+
   selectedFile = file;
   sourceUrl = URL.createObjectURL(file);
+  const stem = file.name.replace(/\.pdf$/i, "").trim();
+  bookTitle.value = stem || "Converted document";
+  bookTitle.setCustomValidity("");
   fileName.textContent = file.name;
   fileSize.textContent = formatBytes(file.size);
   fileFacts.hidden = false;
   convertButton.disabled = false;
   previewSource.disabled = false;
-  const fingerprint = `${file.name}:${file.size}:${file.lastModified}`;
-  let hash = 0;
-  for (const character of fingerprint) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  jobNumber.textContent = `No. ${String(hash % 10000).padStart(4, "0")}`;
+  dropTitle.textContent = "Replace PDF";
+  dropHelp.textContent = "or drop another here";
+  appShell.dataset.hasFile = "true";
   showSourcePreview();
-  setStatus("Ready", "Review the source, then start the local conversion.", "ready");
+  setFlow("ready");
+  setStatus("Ready", "Review the source or start the local conversion.", "ready");
+}
+
+function clearConversionReport() {
+  resultSummary.hidden = true;
+  warningCount.textContent = "";
+  delete warningCount.dataset.hasWarnings;
+  sourcePageCount.textContent = "—";
+  textPageCount.textContent = "—";
+  imageCount.textContent = "—";
+  warningGroups.replaceChildren();
 }
 
 function clearDownload() {
+  appShell.dataset.hasOutput = "false";
+  blankPreviewFrame();
+  epubPreview.clear();
   if (outputUrl) URL.revokeObjectURL(outputUrl);
   outputUrl = null;
   outputFormat = null;
   download.hidden = true;
   download.removeAttribute("href");
   previewOutput.disabled = true;
-  epubPreview.clear();
   previewLimit.hidden = true;
+  clearConversionReport();
   if (sourceUrl) showSourcePreview();
+  else showEmptyPreview();
 }
 
 function showEmptyPreview() {
+  blankPreviewFrame();
   epubPreview.releasePageUrls();
-  previewFrame.hidden = true;
-  previewFrame.removeAttribute("src");
-  previewFrame.setAttribute("sandbox", "allow-same-origin");
   sheet.hidden = false;
   previewControls.hidden = true;
   previewLimit.hidden = true;
@@ -143,9 +355,10 @@ function setSelectedPreviewTab(tab) {
 }
 
 function showPdfPreview(url, title) {
-  // Chrome's built-in PDF viewer refuses to load in a sandboxed frame. PDF
-  // bytes still come only from the user's local file or Paprika's local output.
-  previewFrame.removeAttribute("src");
+  if (!url?.startsWith("blob:")) {
+    throw new Error("The PDF preview URL was not created by this browser tab.");
+  }
+  previewFrame.src = "about:blank";
   previewFrame.removeAttribute("sandbox");
   previewFrame.title = title;
   previewFrame.src = url;
@@ -196,19 +409,19 @@ function showOutputPreview(index = epubPreview.chapterIndex) {
   previewPosition.textContent = `Preview ${epubPreview.chapterIndex + 1} of ${epubPreview.pageCount} · source page ${chapter.source_page}`;
   previewLimit.hidden = !epubPreview.truncated;
   previewLimit.textContent = epubPreview.truncated
-    ? `Preview is limited to ${epubPreview.pageCount} source pages. The download contains the complete EPUB.`
+    ? `Preview limited to ${epubPreview.pageCount} source pages. The download contains the complete EPUB.`
     : "";
 }
 
 function setJobControlsDisabled(disabled) {
   fileInput.disabled = disabled;
   dropZone.dataset.disabled = String(disabled);
-  for (const control of form.querySelectorAll("select, input[type='number']")) {
+  for (const control of form.querySelectorAll("select, input[type='number'], input[type='text']")) {
     control.disabled = disabled;
   }
 }
 
-function options() {
+function rasterConversionOptions() {
   return {
     mode: document.querySelector("#mode").value,
     width: Number(width.value),
@@ -222,25 +435,56 @@ function options() {
   };
 }
 
+function canonicalLanguageTag() {
+  const value = bookLanguage.value.trim();
+  if (!value || value.length > 35) return null;
+  try {
+    const [canonical] = Intl.getCanonicalLocales(value);
+    return canonical && canonical.length <= 35 ? canonical : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateMetadata() {
+  bookTitle.setCustomValidity(
+    bookTitle.value.trim() ? "" : "Enter a title for the generated EPUB.",
+  );
+  const language = canonicalLanguageTag();
+  bookLanguage.setCustomValidity(
+    language ? "" : "Enter a valid BCP 47 language tag, such as en, fr, or pt-BR.",
+  );
+  if (language) bookLanguage.value = language;
+  return form.reportValidity() ? language : null;
+}
+
 function updateOutputUI() {
   const isEpub = format.value === "epub";
+  epubOptions.hidden = !isEpub;
   rasterOptions.hidden = isEpub;
   rasterAnalysis.hidden = isEpub;
+  bookTitle.disabled = !isEpub;
+  bookLanguage.disabled = !isEpub;
   convertButton.textContent = isEpub ? "Make EPUB" : "Make raster PDF";
-  previewOutput.textContent = isEpub ? "Generated EPUB" : "Generated PDF";
-  sheet.querySelector("i").textContent = isEpub ? "EPUB" : "PDF";
+  previewOutput.textContent = isEpub ? "Result EPUB" : "Result PDF";
+  routeResultFormat.textContent = isEpub ? "EPUB" : "PDF";
   formatNote.textContent = isEpub
-    ? "Selectable text, reader-controlled type size, and compact output for born-digital PDFs."
-    : "Experimental fallback. Pages are rendered as images, so output is larger and text is not selectable.";
+    ? "Selectable text and reader-controlled type size for born-digital PDFs."
+    : "Experimental fallback. Pages become images, so output is larger and text is not selectable.";
 
   if (isEpub) {
-    sheet.style.setProperty("--sheet-ratio", 0.7);
     dimensions.textContent = "Reflowable EPUB · selectable text";
   } else {
-    const output = options();
-    sheet.style.setProperty("--sheet-ratio", output.width / output.height);
+    const output = rasterConversionOptions();
     dimensions.textContent = `${output.width} × ${output.height} px · ${output.dpi} dpi`;
   }
+}
+
+function invalidateCompletedOutput() {
+  if (!outputUrl || activeJob) return;
+  clearDownload();
+  setFlow(selectedFile ? "ready" : "empty");
+  setStatus("Ready", "Output settings changed. Start a new local conversion.", "ready");
 }
 
 previewSource.addEventListener("click", showSourcePreview);
@@ -249,8 +493,11 @@ previewPrevious.addEventListener("click", () => showOutputPreview(epubPreview.ch
 previewNext.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex + 1));
 
 format.addEventListener("change", () => {
-  clearDownload();
+  if (outputUrl) clearDownload();
+  clearDiagnostics();
   updateOutputUI();
+  setFlow(selectedFile ? "ready" : "empty");
+  if (selectedFile) setStatus("Ready", "Output format changed. Start a local conversion.", "ready");
 });
 
 preset.addEventListener("change", () => {
@@ -260,21 +507,34 @@ preset.addEventListener("change", () => {
     height.value = nextHeight;
     dpi.value = nextDpi;
   }
+  invalidateCompletedOutput();
   updateOutputUI();
 });
 
 for (const field of [width, height, dpi]) {
   field.addEventListener("input", () => {
     preset.value = "custom";
+    invalidateCompletedOutput();
     updateOutputUI();
   });
 }
+
+for (const field of [bookTitle, bookLanguage]) {
+  field.addEventListener("input", () => {
+    field.setCustomValidity("");
+    invalidateCompletedOutput();
+  });
+}
+bookLanguage.addEventListener("blur", () => {
+  const language = canonicalLanguageTag();
+  if (language) bookLanguage.value = language;
+});
 
 fileInput.addEventListener("change", () => setFile(fileInput.files?.[0] ?? null));
 for (const eventName of ["dragenter", "dragover"]) {
   dropZone.addEventListener(eventName, (event) => {
     event.preventDefault();
-    dropZone.dataset.dragging = "true";
+    if (!activeJob) dropZone.dataset.dragging = "true";
   });
 }
 for (const eventName of ["dragleave", "drop"]) {
@@ -290,43 +550,58 @@ dropZone.addEventListener("drop", (event) => {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!selectedFile || activeJob) return;
-  clearDownload();
+
   const selectedFormat = format.value;
-  const stem = selectedFile.name.replace(/\.pdf$/i, "");
+  const language = selectedFormat === "epub" ? validateMetadata() : null;
+  if (selectedFormat === "epub" && !language) return;
+
+  clearDownload();
+  clearDiagnostics();
+  const stem = selectedFile.name.replace(/\.pdf$/i, "").trim();
   activeJob = {
     id: nextJobId++,
     file: selectedFile,
     format: selectedFormat,
-    title: stem || "Converted document",
-    options: options(),
+    title: selectedFormat === "epub" ? bookTitle.value.trim() : stem || "Converted document",
+    language: language ?? "en",
+    options: rasterConversionOptions(),
     outputName: `${stem || "document"}.paprika.${selectedFormat}`,
   };
   setJobControlsDisabled(true);
   convertButton.disabled = true;
   cancelButton.hidden = false;
   progress.hidden = false;
-  setStatus("Opening", "Loading the Rust engine and checking the document…", "working");
+  setFlow("working");
+  setStatus("Starting", "Preparing the local conversion engine…", "working");
 
   const job = activeJob;
   try {
+    const activeWorker = ensureWorker();
     const input = await job.file.arrayBuffer();
     if (activeJob !== job) return;
-    worker ??= createWorker();
-    worker.postMessage(
+    activeWorker.postMessage(
       {
         type: "convert",
         jobId: job.id,
         input,
         format: job.format,
         title: job.title,
+        language: job.language,
         options: job.options,
       },
       [input],
     );
   } catch (error) {
-    if (activeJob === job) {
-      finishWithError(error instanceof Error ? error.message : String(error));
-    }
+    if (activeJob !== job) return;
+    const failure = error instanceof BrowserFailure
+      ? error
+      : createBrowserFailure(
+        "conversion-start-failed",
+        "conversion-start",
+        "The browser could not start the conversion. Your source is still selected; retry.",
+        error,
+      );
+    finishWithError(failure);
   }
 });
 
@@ -336,15 +611,45 @@ cancelButton.addEventListener("click", () => {
   progress.hidden = true;
   cancelButton.hidden = true;
   setJobControlsDisabled(false);
+  updateOutputUI();
   convertButton.disabled = !selectedFile;
-  setStatus("Canceled", "The source file is still selected. No output was saved.", "ready");
+  setFlow(selectedFile ? "ready" : "empty");
+  setStatus("Canceled", "The source is still selected. No output was saved.", "ready");
 });
 
 function handleWorkerMessage(event) {
   const message = event.data;
-  if (!activeJob || message.jobId !== activeJob.id) return;
+  if (!message || typeof message !== "object") {
+    if (activeJob) {
+      resetWorker();
+      finishWithError(
+        new BrowserFailure(
+          "worker-protocol-error",
+          "worker-message",
+          "The conversion worker returned an unreadable response. Retry the conversion.",
+          "ProtocolError",
+        ),
+      );
+    }
+    return;
+  }
+  if (
+    !activeJob
+    || (message.jobId !== activeJob.id && !(message.type === "error" && message.jobId == null))
+  ) return;
+
+  if (message.type === "booting") {
+    setStatus("Starting", "Loading the local WebAssembly engine…", "working");
+    return;
+  }
   if (message.type === "composing") {
-    setStatus("Composing", "Extracting and typesetting locally…", "working");
+    setStatus(
+      message.format === "pdf" ? "Rendering" : "Composing",
+      message.format === "pdf"
+        ? "Rendering and fitting source pages locally…"
+        : "Extracting text and rebuilding reading order locally…",
+      "working",
+    );
     return;
   }
   if (message.type === "inspected") {
@@ -356,58 +661,161 @@ function handleWorkerMessage(event) {
     return;
   }
   if (message.type === "error") {
-    finishWithError(message.message);
+    resetWorker();
+    finishWithError(
+      new BrowserFailure(
+        typeof message.code === "string" ? message.code : "conversion-failed",
+        typeof message.stage === "string" ? message.stage : "conversion",
+        typeof message.message === "string" && message.message
+          ? message.message
+          : "The conversion failed. Your source is still selected; retry.",
+        typeof message.errorName === "string" ? message.errorName : "Error",
+      ),
+    );
     return;
   }
-  if (message.type === "complete") {
-    const isEpub = message.format === "epub";
-    const mime = isEpub ? "application/epub+zip" : "application/pdf";
-    const label = isEpub ? "EPUB" : "PDF";
-    const blob = new Blob([message.output], { type: mime });
-    outputUrl = URL.createObjectURL(blob);
-    outputFormat = message.format;
-    download.href = outputUrl;
-    download.download = activeJob?.outputName ?? `paprika-output.${message.format}`;
-    download.textContent = `Download ${formatBytes(blob.size)} ${label}`;
-    download.hidden = false;
-    previewOutput.disabled = false;
+  if (message.type !== "complete") return;
 
-    try {
-      if (isEpub) {
-        if (message.preview?.chapters?.length) {
-          epubPreview.setData(message.preview, message.previewAssets ?? []);
-          showOutputPreview(0);
-        } else {
-          previewOutput.disabled = true;
-          showSourcePreview();
-          previewLimit.hidden = false;
-          previewLimit.textContent = "The complete EPUB is ready, but this document exceeded the bounded browser preview.";
-        }
-      } else {
-        showOutputPreview(0);
-      }
-    } catch (error) {
-      previewOutput.disabled = true;
-      showSourcePreview();
-      previewLimit.hidden = false;
-      previewLimit.textContent = `The output is ready, but its embedded preview could not be shown: ${error instanceof Error ? error.message : String(error)}`;
-    }
-
-    const pageSummary = message.pages
-      ? `${message.pages} source page${message.pages === 1 ? "" : "s"}. `
-      : "";
-    setStatus(
-      "Ready to download",
-      `${pageSummary}Conversion finished locally. The source file was not uploaded.`,
-      "success",
+  try {
+    completeJob(message);
+  } catch (error) {
+    resetWorker();
+    finishWithError(
+      createBrowserFailure(
+        "result-processing-failed",
+        "result-processing",
+        "The conversion finished, but the browser could not prepare the result. Retry the conversion.",
+        error,
+      ),
     );
-    finishJob();
   }
 }
 
-function finishWithError(message, workerFailed = false) {
-  setStatus("Could not convert", message || "The conversion failed.", "error");
-  if (workerFailed) resetWorker();
+function completeJob(message) {
+  if (!(message.output instanceof ArrayBuffer)) {
+    throw new TypeError("The worker result did not contain a transferable output buffer.");
+  }
+  const completedJob = activeJob;
+  const isEpub = message.format === "epub";
+  const mime = isEpub ? "application/epub+zip" : "application/pdf";
+  const label = isEpub ? "EPUB" : "PDF";
+  const blob = new Blob([message.output], { type: mime });
+  outputUrl = URL.createObjectURL(blob);
+  outputFormat = message.format;
+  download.href = outputUrl;
+  download.download = completedJob?.outputName ?? `paprika-output.${message.format}`;
+  download.textContent = `Download ${label} · ${formatBytes(blob.size)}`;
+  download.hidden = false;
+  previewOutput.disabled = false;
+
+  try {
+    if (isEpub) {
+      if (message.preview?.chapters?.length) {
+        epubPreview.setData(message.preview, message.previewAssets ?? []);
+        showOutputPreview(0);
+      } else {
+        previewOutput.disabled = true;
+        showSourcePreview();
+        previewLimit.hidden = false;
+        previewLimit.textContent = "The EPUB is ready, but this document exceeded the bounded browser preview.";
+      }
+    } else {
+      showOutputPreview(0);
+    }
+  } catch {
+    epubPreview.clear();
+    previewOutput.disabled = true;
+    showSourcePreview();
+    previewLimit.hidden = false;
+    previewLimit.textContent = "The output is ready, but its embedded preview could not be shown safely.";
+  }
+
+  renderConversionReport({
+    format: message.format,
+    pages: message.pages,
+    textPages: message.textPages,
+    images: message.imageCount,
+    warnings: message.warnings,
+  });
+  const pageSummary = Number.isSafeInteger(message.pages)
+    ? `${message.pages} source page${message.pages === 1 ? "" : "s"}. `
+    : "";
+  appShell.dataset.hasOutput = "true";
+  setFlow("success");
+  setStatus(
+    "Ready",
+    `${pageSummary}Review the report, then download the local result.`,
+    "success",
+  );
+  finishJob();
+  scheduleWorkerRecycle(completedJob?.file.size ?? 0);
+}
+
+function renderConversionReport(report) {
+  const warnings = Array.isArray(report.warnings)
+    ? report.warnings.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim())
+    : [];
+  sourcePageCount.textContent = countText(report.pages);
+  textPageCount.textContent = report.format === "epub" ? countText(report.textPages) : "N/A";
+  imageCount.textContent = report.format === "epub" ? countText(report.images) : "N/A";
+  warningCount.textContent = warnings.length === 0
+    ? "No warnings"
+    : `${warnings.length} warning${warnings.length === 1 ? "" : "s"}`;
+  warningCount.dataset.hasWarnings = String(warnings.length > 0);
+  warningGroups.replaceChildren();
+
+  for (const [group, items] of groupWarnings(warnings)) {
+    const section = document.createElement("section");
+    section.className = "warning-group";
+    const heading = document.createElement("h4");
+    heading.textContent = group;
+    const list = document.createElement("ul");
+    for (const warning of items) {
+      const item = document.createElement("li");
+      item.textContent = warning.length > 800 ? `${warning.slice(0, 797)}…` : warning;
+      list.append(item);
+    }
+    section.append(heading, list);
+    warningGroups.append(section);
+  }
+  resultSummary.hidden = false;
+}
+
+function countText(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? String(value) : "—";
+}
+
+function groupWarnings(warnings) {
+  const groups = new Map();
+  for (const warning of warnings) {
+    let group = "Other conversion notes";
+    if (/\b(ocr|text layer|selectable text|text extraction)\b/i.test(warning)) {
+      group = "Text recovery";
+    } else if (/\b(limit|budget|exceed|too large|memory|skipped)\b/i.test(warning)) {
+      group = "Browser limits";
+    } else if (/\b(math|equations?|figures?|images?|visual|columns?)\b/i.test(warning)) {
+      group = "Visual content";
+    } else if (/\b(could not|failed|decode|encode|inspect)\b/i.test(warning)) {
+      group = "Processing";
+    }
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(warning);
+  }
+  return groups;
+}
+
+function finishWithError(error) {
+  const failure = error instanceof BrowserFailure
+    ? error
+    : createBrowserFailure(
+      "conversion-failed",
+      "conversion",
+      "The conversion failed. Your source is still selected; retry.",
+      error,
+    );
+  setFlow("error");
+  setStatus("Could not convert", failure.message, "error");
+  showDiagnostics(failure);
   finishJob();
 }
 
@@ -416,16 +824,74 @@ function finishJob() {
   progress.hidden = true;
   cancelButton.hidden = true;
   setJobControlsDisabled(false);
+  updateOutputUI();
   convertButton.disabled = !selectedFile;
 }
 
+function showDiagnostics(failure) {
+  const safeCode = safeDiagnosticToken(failure.code, "unknown-error");
+  const safeStage = safeDiagnosticToken(failure.stage, "unknown-stage");
+  const safeErrorName = safeDiagnosticToken(failure.causeName, "Error");
+  diagnosticText.textContent = [
+    "Paprika browser diagnostic",
+    `Code: ${safeCode}`,
+    `Stage: ${safeStage}`,
+    `Error type: ${safeErrorName}`,
+    `Output: ${format.value === "pdf" ? "raster-pdf" : "epub"}`,
+    `Worker API: ${"Worker" in window ? "available" : "unavailable"}`,
+    `WebAssembly: ${typeof WebAssembly === "object" ? "available" : "unavailable"}`,
+    `WebAssembly SIMD: ${hasWasmSimd() ? "available" : "unavailable"}`,
+    "Document names and contents: omitted",
+  ].join("\n");
+  copyStatus.textContent = "";
+  diagnostics.hidden = false;
+  diagnostics.open = true;
+}
+
+function safeDiagnosticToken(value, fallback) {
+  const token = String(value ?? "").replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 64);
+  return token || fallback;
+}
+
+function clearDiagnostics() {
+  diagnostics.hidden = true;
+  diagnostics.open = false;
+  diagnosticText.textContent = "";
+  copyStatus.textContent = "";
+}
+
+copyDiagnosticButton.addEventListener("click", async () => {
+  const text = diagnosticText.textContent;
+  if (!text) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(text);
+    copyStatus.textContent = "Copied.";
+  } catch {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.readOnly = true;
+    field.setAttribute("aria-hidden", "true");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    const copied = document.execCommand("copy");
+    field.remove();
+    copyStatus.textContent = copied ? "Copied." : "Copy failed. Select the report manually.";
+  }
+});
+
 window.addEventListener("pagehide", (event) => {
   if (event.persisted) return;
-  worker?.terminate();
-  worker = null;
+  activeJob = null;
+  resetWorker();
+  blankPreviewFrame();
   epubPreview.clear();
-  if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+  releaseSourceUrl();
   if (outputUrl) URL.revokeObjectURL(outputUrl);
+  outputUrl = null;
 });
 
 updateOutputUI();
+setFlow("empty");

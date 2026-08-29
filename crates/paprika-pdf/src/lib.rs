@@ -21,6 +21,8 @@ const NATIVE_OUTPUT_BYTE_LIMIT: usize = 512 * 1024 * 1024;
 /// Working-set limits for the in-memory raster pipeline.
 #[derive(Clone, Copy, Debug)]
 pub struct PdfLimits {
+    /// Maximum source pages accepted before any page is rendered.
+    pub max_pages: usize,
     pub max_source_pixels_per_page: u64,
     /// Maximum uncompressed output pixels buffered between source pages.
     pub max_output_pixels: u64,
@@ -31,6 +33,7 @@ pub struct PdfLimits {
 impl PdfLimits {
     pub const fn native() -> Self {
         Self {
+            max_pages: 10_000,
             max_source_pixels_per_page: NATIVE_SOURCE_PIXEL_LIMIT,
             max_output_pixels: NATIVE_OUTPUT_PIXEL_LIMIT,
             max_output_bytes: NATIVE_OUTPUT_BYTE_LIMIT,
@@ -39,6 +42,7 @@ impl PdfLimits {
 
     pub const fn browser() -> Self {
         Self {
+            max_pages: 500,
             // A rendered page temporarily exists as RGBA and RGB plus layout
             // crops, so 24 MP can already approach a few hundred MiB.
             max_source_pixels_per_page: 24_000_000,
@@ -61,6 +65,8 @@ pub enum PdfError {
     Parse,
     #[error("the PDF contains no pages")]
     Empty,
+    #[error("the PDF contains {pages} pages; the configured limit is {limit}")]
+    TooManyPages { pages: usize, limit: usize },
     #[error("source page {page} would rasterize to {width}x{height}; reduce source DPI")]
     RasterTooLarge {
         page: usize,
@@ -77,7 +83,15 @@ pub enum PdfError {
 
 /// Reflow an in-memory PDF with conservative native-process limits.
 pub fn optimize_pdf(input: &[u8], options: OptimizationOptions) -> Result<OptimizedPdf, PdfError> {
-    optimize_pdf_with_limits(input, options, PdfLimits::native())
+    optimize_pdf_owned(input.to_vec(), options)
+}
+
+/// Reflow owned PDF bytes without retaining an extra full-size input copy.
+pub fn optimize_pdf_owned(
+    input: Vec<u8>,
+    options: OptimizationOptions,
+) -> Result<OptimizedPdf, PdfError> {
+    optimize_pdf_with_limits_owned(input, options, PdfLimits::native())
 }
 
 /// Reflow an in-memory PDF with an explicit raster working-set budget.
@@ -86,14 +100,29 @@ pub fn optimize_pdf_with_limits(
     options: OptimizationOptions,
     limits: PdfLimits,
 ) -> Result<OptimizedPdf, PdfError> {
+    optimize_pdf_with_limits_owned(input.to_vec(), options, limits)
+}
+
+/// Reflow owned PDF bytes with an explicit raster working-set budget.
+pub fn optimize_pdf_with_limits_owned(
+    input: Vec<u8>,
+    options: OptimizationOptions,
+    limits: PdfLimits,
+) -> Result<OptimizedPdf, PdfError> {
     options.validate()?;
-    let pdf = SourcePdf::new(input.to_vec()).map_err(|_| PdfError::Parse)?;
+    let pdf = SourcePdf::new(input).map_err(|_| PdfError::Parse)?;
     let pages = pdf.pages();
     if pages.is_empty() {
         return Err(PdfError::Empty);
     }
 
     let source_pages = pages.len();
+    if source_pages > limits.max_pages {
+        return Err(PdfError::TooManyPages {
+            pages: source_pages,
+            limit: limits.max_pages,
+        });
+    }
     let mut optimizer = DocumentOptimizer::new_with_output_pixel_limit(
         options.clone(),
         Some(limits.max_output_pixels),
@@ -336,6 +365,31 @@ mod tests {
     }
 
     #[test]
+    fn rejects_documents_over_the_page_limit_before_rendering() {
+        let input_pages = vec![RasterPage::white(10, 10).unwrap(); 2];
+        let input = encode_raster_pdf(&input_pages, 72);
+        let error = optimize_pdf_with_limits(
+            &input,
+            OptimizationOptions {
+                mode: paprika_core::Mode::FitPage,
+                width: 128,
+                height: 128,
+                source_dpi: 72,
+                ..Default::default()
+            },
+            PdfLimits {
+                max_pages: 1,
+                ..PdfLimits::browser()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            PdfError::TooManyPages { pages: 2, limit: 1 }
+        ));
+    }
+
+    #[test]
     fn rejects_compressed_output_over_the_byte_budget() {
         let source = RasterPage::white(20, 20).unwrap();
         let input = encode_raster_pdf(&[source], 72);
@@ -349,6 +403,7 @@ mod tests {
                 ..Default::default()
             },
             PdfLimits {
+                max_pages: 1,
                 max_source_pixels_per_page: 1_000_000,
                 max_output_pixels: 1_000_000,
                 max_output_bytes: 1,

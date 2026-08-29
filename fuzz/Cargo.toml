@@ -1,0 +1,31 @@
+[package]
+name = "paprika-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+paprika-core = { version = "0.1.0", path = "../crates/paprika-core" }
+paprika-epub = { version = "0.1.0", path = "../crates/paprika-epub" }
+paprika-pdf = { version = "0.1.0", path = "../crates/paprika-pdf" }
+
+[[bin]]
+name = "epub"
+path = "fuzz_targets/epub.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raster"
+path = "fuzz_targets/raster.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
