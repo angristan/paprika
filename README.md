@@ -125,7 +125,7 @@ bun run check:fuzz   # compile the bounded parser/layout fuzz harnesses
 bun run check:epub   # convert a checksum-pinned fixture and run EPUBCheck 5.3.0
 ```
 
-The GitHub pre-deploy workflow runs the full gate and Chromium, Firefox, and WebKit smoke tests for pull requests and `main`. Browser tests always start a fresh local Wrangler server on `127.0.0.1`; they cannot silently test the production site.
+The GitHub pre-deploy workflow runs the full gate and Chromium, Firefox, and WebKit smoke tests for pull requests and `main`. Browser tests always start a fresh local Wrangler server on `127.0.0.1`; they cannot silently test the production site. See the [reliability audit evidence](docs/audit-validation.md) for defect-to-test traceability and reviewed desktop, mobile, and zoom renderings.
 
 For a representative multi-column regression, convert [`QuiCK.pdf`](https://www.foundationdb.org/files/QuiCK.pdf) and verify that Algorithm 2 precedes Algorithm 3 in source page 8, all chapter XHTML remains parseable, and output stays well below the source PDF size.
 
