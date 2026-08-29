@@ -376,6 +376,7 @@ h1 {
 
 .output-fields {
   display: grid;
+  min-inline-size: 0;
   gap: 12px;
   margin: 0;
   padding: 16px 0 0;
@@ -384,8 +385,9 @@ h1 {
 }
 
 .output-fields legend {
-  float: left;
-  width: 100%;
+  float: none;
+  width: auto;
+  max-width: 100%;
   margin-bottom: 12px;
   padding: 0;
   font-size: 15px;
