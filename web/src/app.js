@@ -12,6 +12,10 @@ const cancelButton = document.querySelector("#cancel");
 const download = document.querySelector("#download");
 const status = document.querySelector("#status");
 const progress = document.querySelector("#progress");
+const format = document.querySelector("#format");
+const formatNote = document.querySelector("#format-note");
+const rasterOptions = document.querySelector("#raster-options");
+const rasterAnalysis = document.querySelector("#raster-analysis");
 const preset = document.querySelector("#preset");
 const width = document.querySelector("#width");
 const height = document.querySelector("#height");
@@ -102,12 +106,30 @@ function options() {
   };
 }
 
-function updateSheet() {
-  const output = options();
-  const ratio = output.width / output.height;
-  sheet.style.setProperty("--sheet-ratio", ratio);
-  dimensions.textContent = `${output.width} × ${output.height} px · ${output.dpi} dpi`;
+function updateOutputUI() {
+  const isEpub = format.value === "epub";
+  rasterOptions.hidden = isEpub;
+  rasterAnalysis.hidden = isEpub;
+  convertButton.textContent = isEpub ? "Make EPUB" : "Make raster PDF";
+  sheet.querySelector("i").textContent = isEpub ? "EPUB" : "PDF";
+  formatNote.textContent = isEpub
+    ? "Selectable text, reader-controlled type size, and compact output for born-digital PDFs."
+    : "Experimental fallback. Pages are rendered as images, so output is larger and text is not selectable.";
+
+  if (isEpub) {
+    sheet.style.setProperty("--sheet-ratio", 0.7);
+    dimensions.textContent = "Reflowable EPUB · selectable text";
+  } else {
+    const output = options();
+    sheet.style.setProperty("--sheet-ratio", output.width / output.height);
+    dimensions.textContent = `${output.width} × ${output.height} px · ${output.dpi} dpi`;
+  }
 }
+
+format.addEventListener("change", () => {
+  clearDownload();
+  updateOutputUI();
+});
 
 preset.addEventListener("change", () => {
   if (preset.value !== "custom") {
@@ -116,13 +138,13 @@ preset.addEventListener("change", () => {
     height.value = nextHeight;
     dpi.value = nextDpi;
   }
-  updateSheet();
+  updateOutputUI();
 });
 
 for (const field of [width, height, dpi]) {
   field.addEventListener("input", () => {
     preset.value = "custom";
-    updateSheet();
+    updateOutputUI();
   });
 }
 
@@ -147,10 +169,14 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!selectedFile || activeJob) return;
   clearDownload();
+  const outputFormat = format.value;
+  const stem = selectedFile.name.replace(/\.pdf$/i, "");
   activeJob = {
     file: selectedFile,
+    format: outputFormat,
+    title: stem || "Converted document",
     options: options(),
-    outputName: `${selectedFile.name.replace(/\.pdf$/i, "")}.paprika.pdf`,
+    outputName: `${stem || "document"}.paprika.${outputFormat}`,
   };
   setJobControlsDisabled(true);
   convertButton.disabled = true;
@@ -165,7 +191,16 @@ form.addEventListener("submit", async (event) => {
   try {
     const input = await job.file.arrayBuffer();
     if (activeJob !== job) return;
-    worker.postMessage({ type: "convert", input, options: job.options }, [input]);
+    worker.postMessage(
+      {
+        type: "convert",
+        input,
+        format: job.format,
+        title: job.title,
+        options: job.options,
+      },
+      [input],
+    );
   } catch (error) {
     if (activeJob === job) {
       finishWithError(error instanceof Error ? error.message : String(error));
@@ -189,7 +224,9 @@ function handleWorkerMessage(event) {
   if (message.type === "inspected") {
     setStatus(
       "Composing",
-      `${message.pages} source page${message.pages === 1 ? "" : "s"} · rendering and reflowing locally…`,
+      message.format === "epub"
+        ? `${message.pages} source page${message.pages === 1 ? "" : "s"} · extracting and typesetting locally…`
+        : `${message.pages} source page${message.pages === 1 ? "" : "s"} · rendering locally…`,
       "working",
     );
     return;
@@ -199,11 +236,14 @@ function handleWorkerMessage(event) {
     return;
   }
   if (message.type === "complete") {
-    const blob = new Blob([message.output], { type: "application/pdf" });
+    const isEpub = message.format === "epub";
+    const mime = isEpub ? "application/epub+zip" : "application/pdf";
+    const label = isEpub ? "EPUB" : "PDF";
+    const blob = new Blob([message.output], { type: mime });
     outputUrl = URL.createObjectURL(blob);
     download.href = outputUrl;
-    download.download = activeJob?.outputName ?? "paprika-output.pdf";
-    download.textContent = `Download ${formatBytes(blob.size)} PDF`;
+    download.download = activeJob?.outputName ?? `paprika-output.${message.format}`;
+    download.textContent = `Download ${formatBytes(blob.size)} ${label}`;
     download.hidden = false;
     setStatus("Ready to download", "Conversion finished. The source file was not uploaded.", "success");
     finishWorker();
@@ -225,4 +265,4 @@ function finishWorker() {
   convertButton.disabled = !selectedFile;
 }
 
-updateSheet();
+updateOutputUI();

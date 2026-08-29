@@ -1,47 +1,44 @@
 # Paprika
 
-**[Use Paprika in your browser →](https://paprika.stanislas.cloud)**
+**[Convert a PDF in your browser →](https://paprika.stanislas.cloud)**
 
-Paprika repaginates PDFs for e-readers and phones. It trims margins, detects one- or two-column reading order, and wraps rasterized words onto a device-sized page.
+Paprika turns born-digital PDFs into compact, reflowable EPUB 3 books for e-readers and phones. Text stays selectable, font size is controlled by the reader, and the document never leaves your device.
 
-The same Rust pipeline runs as a native CLI and as WebAssembly in a local-only browser app. The static website can be hosted with Cloudflare Workers Static Assets; documents are not uploaded.
+The same Rust pipeline runs in the native CLI and browser WebAssembly app. An experimental raster PDF mode remains available for scans and layouts that semantic extraction cannot reconstruct safely.
 
 > Paprika is an early clean-room implementation inspired by the workflow of [k2pdfopt](https://www.willus.com/k2pdfopt/). It does not aim for command-line or output compatibility.
 
 ## What works
 
-- Pure-Rust PDF input and output; no PDFium, Poppler, or system library
-- Whitespace trimming
-- One- and two-column detection
-- Graphical word wrapping for scanned and ordinary PDFs
-- `fit-width` and `fit-page` modes
-- Configurable output dimensions, DPI, margins, text scale, and white threshold
+- Reflowable EPUB 3 output with selectable text
+- Column-aware reading order for born-digital PDFs
+- Headings, lists, links, basic tables, Unicode math text, embedded images, and captioned vector-figure crops
+- One source-page chapter per EPUB spine entry for traceability
 - Native CLI on Linux, macOS, and Windows
 - Browser conversion in a cancellable Web Worker
-- Static Cloudflare deployment with no application backend
+- Static Cloudflare deployment with no upload endpoint
+- Experimental raster `fit-width`, `fit-page`, and graphical `reflow` PDF output
 
-Paprika currently emits raster PDFs without selectable text. It does not support OCR, encrypted PDFs, DjVu, semantic table reconstruction, deskew/dewarp, right-to-left reading order, or native/vector-preserving output. Complex formulas, diagrams, and tables usually work better with `fit-width` than `reflow`.
+Semantic PDF extraction is inherently heuristic. Complex equations, uncaptioned vector graphics, unusual layouts, and reading order can require manual review. Paprika does not run OCR; scanned pages are reported and preserved only when their raster image can be extracted. Password-protected PDFs are not supported.
 
 ## CLI
 
-Build and convert a document:
+Build and convert to EPUB (the default):
 
 ```bash
 cargo build --release --bin paprika
 ./target/release/paprika paper.pdf
 ```
 
-The default output is `paper.paprika.pdf` at 758 × 1024 px. Useful alternatives:
+The default output is `paper.paprika.epub` next to the source file.
 
 ```bash
-# Keep each trimmed source page intact.
-paprika paper.pdf --mode fit-page --width 1072 --height 1448 --dpi 300
+# Set book metadata and omit embedded raster images.
+paprika paper.pdf --title "Paper title" --language en --no-images
 
-# Trim, fit to width, and split tall content across output pages.
-paprika paper.pdf --mode fit-width --width 1080 --height 1440 --dpi 265
-
-# Tune graphical reflow.
-paprika paper.pdf --font-size 14 --columns 2 --source-dpi 180
+# Experimental raster fallback. A .pdf output path also selects this format.
+paprika paper.pdf --format pdf --mode fit-width
+paprika paper.pdf --output paper.paprika.pdf
 ```
 
 Run `paprika --help` for the complete option list. Existing output is never replaced unless `--force` is supplied.
@@ -54,7 +51,7 @@ Prerequisites:
 - `wasm-pack` 0.15 or newer
 - Bun 1.4 or newer
 
-On Arch Linux, install `wasm-pack` from the official repository:
+On Arch Linux:
 
 ```bash
 sudo pacman -S wasm-pack
@@ -63,82 +60,60 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-`bun run build` writes the deployable static site to `web/dist/`. Generated WASM and static output are ignored by source control.
-
-The browser build limits input to 64 MiB and 500 pages, each rendered source page to 24 megapixels, transient uncompressed output to 32 megapixels, and compressed output images to 128 MiB. Conversion is synchronous inside a Web Worker, so **Cancel** terminates the worker without blocking the interface. The source and output live only in browser memory.
+`bun run build` writes the deployable static site to `web/dist/`. The browser accepts PDFs up to 64 MiB and 500 pages. EPUB image resources are capped at 56 MiB, semantic XHTML at 24 MiB, and final EPUB output at 96 MiB. Raster mode has separate page and working-memory limits. Conversion is synchronous inside a Web Worker, so **Cancel** terminates the worker without blocking the interface.
 
 ## Cloudflare
 
 [`wrangler.jsonc`](wrangler.jsonc) defines a static-only Worker at [`paprika.stanislas.cloud`](https://paprika.stanislas.cloud). No Worker script, binding, secret, or storage resource is required.
 
-Validate without a remote change:
+Cloudflare Workers Builds watches `main`:
 
-```bash
-bun run check
-```
+- Build: `bun run build:cloudflare`
+- Deploy: `bun run wrangler deploy`
 
-Deploy to the configured Cloudflare account only after reviewing the Worker name and account context:
-
-```bash
-bun run deploy
-```
-
-Cloudflare Workers Builds watches `main`. It runs `bun run build:cloudflare`, which installs the pinned Rust and wasm-pack toolchain in the ephemeral build environment, followed by `bun run wrangler deploy`. The wasm-pack release archive is verified with SHA-256 before use.
+The build bootstrap installs pinned Rust and wasm-pack versions and verifies the wasm-pack archive checksum.
 
 ## Architecture
 
 ```text
-                         ┌──────────────────┐
-PDF bytes ──────────────▶│ paprika-pdf      │
-                         │ Hayro rasterizer │
-                         └────────┬─────────┘
-                                  │ one RGB source page
-                                  ▼
-                         ┌──────────────────┐
-                         │ paprika-core     │
-                         │ trim → regions   │
-                         │ → columns → rows │
-                         │ → words → pages  │
-                         └────────┬─────────┘
-                                  │ device-sized RGB pages
-                                  ▼
-                         ┌──────────────────┐
-                         │ pdf-writer       │
-                         │ compressed PDF   │
-                         └────────┬─────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   ▼                             ▼
-             paprika CLI                  paprika-wasm
-             filesystem                   Uint8Array + Web Worker
+PDF bytes ──▶ pdf_oxide ──▶ Markdown semantic flow ──▶ XHTML pages
+                    │                                      │
+                    └──────── embedded raster images ──────┤
+                                                           ▼
+                                                     EPUB 3 archive
+                                                           │
+                                             ┌─────────────┴─────────────┐
+                                             ▼                           ▼
+                                       paprika CLI                 paprika-wasm
+                                       filesystem                   Web Worker
+
+PDF bytes ──▶ Hayro rasterizer ──▶ paprika-core layout ──▶ raster PDF fallback
 ```
 
-- [`paprika-core`](crates/paprika-core) contains target-independent image analysis and pagination.
-- [`paprika-pdf`](crates/paprika-pdf) renders source pages and writes raster PDF output.
+- [`paprika-epub`](crates/paprika-epub) extracts semantic content and writes EPUB 3 entirely in memory.
+- [`paprika-core`](crates/paprika-core) contains target-independent raster analysis and pagination.
+- [`paprika-pdf`](crates/paprika-pdf) renders source pages and writes the raster fallback.
 - [`paprika-cli`](crates/paprika-cli) owns filesystem behavior and overwrite safety.
 - [`paprika-wasm`](crates/paprika-wasm) owns browser limits and JavaScript bindings.
 - [`web`](web) is a dependency-light static interface.
 
-The optimizer consumes one source raster at a time. Completed output pages are drained and compressed between source pages; only compressed page data is retained until final PDF assembly. This keeps long documents from accumulating full RGB canvases in browser memory.
-
 ## Development
-
-Run the complete validation path:
 
 ```bash
 bun install --frozen-lockfile
 bun run check
 ```
 
-Rust-only development is faster:
+Rust-only validation:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo check -p paprika-wasm --target wasm32-unknown-unknown
 ```
 
-Behavioral tests use synthetic page layouts and a PDF render/write round trip. Browser checks should cover both narrow and wide viewports, file selection, cancel, successful download, and accessibility.
+For a representative multi-column regression, convert [`QuiCK.pdf`](https://www.foundationdb.org/files/QuiCK.pdf) and verify that Algorithm 2 precedes Algorithm 3 in source page 8, all chapter XHTML remains parseable, and output stays well below the source PDF size.
 
 ## License
 

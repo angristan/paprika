@@ -288,6 +288,22 @@ input[type="number"] {
   gap: 14px;
 }
 
+.format-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.raster-options {
+  display: grid;
+  gap: 17px;
+}
+
+.raster-options[hidden] {
+  display: none;
+}
+
 .advanced-fields {
   margin-top: 16px;
 }

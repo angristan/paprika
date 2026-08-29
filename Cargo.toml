@@ -2,6 +2,7 @@
 members = [
   "crates/paprika-core",
   "crates/paprika-pdf",
+  "crates/paprika-epub",
   "crates/paprika-cli",
   "crates/paprika-wasm",
 ]
@@ -24,6 +25,9 @@ image = { version = "0.25.9", default-features = false }
 js-sys = "0.3.83"
 miniz_oxide = "0.8.9"
 pdf-writer = "0.15.0"
+pdf_oxide = { version = "0.3.77", default-features = false }
+pulldown-cmark = { version = "0.13.0", default-features = false, features = ["html"] }
+rbook = { version = "0.7.10", default-features = false, features = ["write"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde-wasm-bindgen = "0.6.5"
 thiserror = "2.0.17"

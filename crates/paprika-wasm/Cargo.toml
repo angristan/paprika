@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 console_error_panic_hook.workspace = true
 js-sys.workspace = true
 paprika-core = { path = "../paprika-core" }
+paprika-epub = { path = "../paprika-epub" }
 paprika-pdf = { path = "../paprika-pdf" }
 serde-wasm-bindgen.workspace = true
 wasm-bindgen.workspace = true
