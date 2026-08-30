@@ -28,7 +28,10 @@ use extraction::{
     extract_page_xhtml,
 };
 use figures::{FigureCrops, collect_figure_crops, page_may_have_figure_caption};
-use geometry::reconstruct_document_title;
+use geometry::{
+    positioned_run_in_headings, reconstruct_document_title, reconstruct_split_headings,
+    table_row_headings,
+};
 use images::{
     ImageDecodeBudget, PageImageCollection, account_image_objects, collect_page_images,
     source_page_bounds,
@@ -40,9 +43,9 @@ use math::{
 use model::SemanticPage;
 use packaging::{build_epub_preview, package_epub};
 use sanitization::{
-    document_identifier, enhance_algorithm_blocks, escape_xml, first_heading,
-    headings_in_document_order, no_text_warning, normalized_language, normalized_title,
-    visible_text_len,
+    apply_reconstructed_heading, demote_heading, document_identifier, enhance_algorithm_blocks,
+    escape_xml, first_heading, headings_in_document_order, no_text_warning, normalized_language,
+    normalized_title, promote_positioned_run_in_headings, visible_text_len,
 };
 
 const DEFAULT_LANGUAGE: &str = "en";
@@ -324,17 +327,13 @@ pub fn convert_pdf_to_epub_owned(
         )?;
         let page_image_bounds: Vec<Rect> =
             page_image_handles.iter().map(|image| image.bbox).collect();
-        let page_spans = if options.include_images || page_index == 0 {
-            document.extract_spans(page_index).unwrap_or_else(|error| {
-                warnings.push(format!(
-                    "Could not inspect positioned text from page {}: {error}",
-                    page_index + 1
-                ));
-                Vec::new()
-            })
-        } else {
+        let page_spans = document.extract_spans(page_index).unwrap_or_else(|error| {
+            warnings.push(format!(
+                "Could not inspect positioned text from page {}: {error}",
+                page_index + 1
+            ));
             Vec::new()
-        };
+        });
         let crops = if options.include_images && page_may_have_figure_caption(&page_spans) {
             render_document
                 .as_ref()
@@ -531,6 +530,25 @@ pub fn convert_pdf_to_epub_owned(
             );
         }
 
+        if let Some(bounds) = source_page_bounds(&document, page_index) {
+            let extracted_headings = headings_in_document_order(&html);
+            for (level, heading) in table_row_headings(&page_spans, bounds, &extracted_headings) {
+                demote_heading(&mut html, level, &heading);
+            }
+            let extracted_headings = headings_in_document_order(&html);
+            for repair in reconstruct_split_headings(&page_spans, bounds, &extracted_headings) {
+                apply_reconstructed_heading(
+                    &mut html,
+                    repair.level,
+                    &repair.original,
+                    &repair.text,
+                    &repair.inserted_words,
+                    &repair.detached_context,
+                );
+            }
+            let positioned_headings = positioned_run_in_headings(&page_spans, bounds);
+            promote_positioned_run_in_headings(&mut html, &positioned_headings);
+        }
         enhance_algorithm_blocks(&mut html);
         let images = if options.include_images {
             let FigureCrops {

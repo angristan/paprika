@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use pdf_oxide::geometry::Rect;
-use pdf_oxide::layout::TextSpan;
+use pdf_oxide::layout::{FontWeight, TextSpan};
 
 use super::math::is_math_span;
 
@@ -13,6 +15,15 @@ pub(super) struct SpanComponent {
 pub(super) struct ReconstructedTitle {
     pub(super) text: String,
     pub(super) bbox: Rect,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ReconstructedHeading {
+    pub(super) level: u8,
+    pub(super) original: String,
+    pub(super) text: String,
+    pub(super) inserted_words: Vec<String>,
+    pub(super) detached_context: String,
 }
 
 pub(super) const MAX_TITLE_SPANS: usize = 4_096;
@@ -178,6 +189,247 @@ pub(super) fn reconstruct_document_title(
         text,
         bbox: intersect_rect(expand_rect(bbox, 1.0), page_bounds)?,
     })
+}
+
+pub(super) fn reconstruct_split_headings(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    headings: &[(u8, String)],
+) -> Vec<ReconstructedHeading> {
+    const MAX_HEADING_SPANS: usize = 64;
+    const MAX_HEADINGS: usize = 128;
+    const MAX_ANCHORS_PER_WORD: usize = 8;
+    if spans.len() > MAX_TITLE_SPANS
+        || headings.len() > MAX_HEADINGS
+        || page_bounds.width <= 0.0
+        || page_bounds.height <= 0.0
+    {
+        return Vec::new();
+    }
+
+    let mut anchors = HashMap::<String, Vec<usize>>::new();
+    for (index, span) in spans.iter().enumerate() {
+        let token = normalized_heading_token(&span.text);
+        if token.is_empty() {
+            continue;
+        }
+        let matches = anchors.entry(token).or_default();
+        if matches.len() <= MAX_ANCHORS_PER_WORD {
+            matches.push(index);
+        }
+    }
+
+    let body_font_size = median_body_font_size(spans);
+    let midpoint = page_bounds.x + page_bounds.width * 0.5;
+    let mut repairs = Vec::new();
+    for (level, original) in headings {
+        let original_words: Vec<String> = original
+            .split_whitespace()
+            .map(normalized_heading_token)
+            .filter(|word| !word.is_empty())
+            .collect();
+        if original_words.len() < 3 || original.chars().count() > 160 {
+            continue;
+        }
+        let Some(anchor_indices) = anchors.get(&original_words[0]) else {
+            continue;
+        };
+        if anchor_indices.len() > MAX_ANCHORS_PER_WORD {
+            continue;
+        }
+
+        let Some(repair) = anchor_indices.iter().find_map(|anchor_index| {
+            let anchor = &spans[*anchor_index];
+            if anchor.font_size < body_font_size * 1.1
+                || anchor.font_weight < FontWeight::Medium
+                || anchor.artifact_type.is_some()
+                || anchor.rotation_degrees.abs() >= 1.0
+            {
+                return None;
+            }
+
+            let (column_left, column_right) = if anchor.bbox.x + anchor.bbox.width * 0.5 < midpoint
+            {
+                (page_bounds.x, midpoint)
+            } else {
+                (midpoint, page_bounds.x + page_bounds.width)
+            };
+            let row_tolerance = anchor.font_size * 0.35;
+            let minimum_y = anchor.bbox.y - anchor.font_size * 1.6;
+            let maximum_y = anchor.bbox.y + row_tolerance;
+            let mut indices: Vec<usize> = spans
+                .iter()
+                .enumerate()
+                .filter(|(_, span)| {
+                    span.artifact_type.is_none()
+                        && span.rotation_degrees.abs() < 1.0
+                        && span.font_name == anchor.font_name
+                        && (span.font_size - anchor.font_size).abs() <= anchor.font_size * 0.05
+                        && span.bbox.x >= column_left
+                        && span.bbox.x + span.bbox.width <= column_right
+                        && span.bbox.y >= minimum_y
+                        && span.bbox.y <= maximum_y
+                })
+                .map(|(index, _)| index)
+                .take(MAX_HEADING_SPANS + 1)
+                .collect();
+            if indices.len() > MAX_HEADING_SPANS || !indices.contains(anchor_index) {
+                return None;
+            }
+            indices.sort_by(|left, right| {
+                spans[*right]
+                    .bbox
+                    .y
+                    .total_cmp(&spans[*left].bbox.y)
+                    .then(spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x))
+            });
+
+            let mut rows: Vec<Vec<usize>> = Vec::new();
+            for index in indices {
+                if let Some(row) = rows.last_mut()
+                    && (spans[row[0]].bbox.y - spans[index].bbox.y).abs() <= row_tolerance
+                {
+                    row.push(index);
+                } else {
+                    rows.push(vec![index]);
+                }
+            }
+            if rows.is_empty() || rows.len() > 2 {
+                return None;
+            }
+            for row in &mut rows {
+                row.sort_by(|left, right| spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x));
+            }
+            let text = rows
+                .iter()
+                .flat_map(|row| row.iter())
+                .map(|index| spans[*index].text.trim())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let reconstructed_words: Vec<&str> = text.split_whitespace().collect();
+            if reconstructed_words.len() <= original_words.len()
+                || reconstructed_words.len() > original_words.len() + 4
+                || text.chars().count() > 180
+            {
+                return None;
+            }
+
+            let mut expected_index = 0usize;
+            let mut inserted_words = Vec::new();
+            for word in &reconstructed_words {
+                if expected_index < original_words.len()
+                    && normalized_heading_token(word) == original_words[expected_index]
+                {
+                    expected_index += 1;
+                } else {
+                    inserted_words.push((*word).to_string());
+                }
+            }
+            if expected_index != original_words.len() || inserted_words.is_empty() {
+                return None;
+            }
+            let detached_context = detached_fragment_context(
+                spans,
+                &inserted_words,
+                &anchor.font_name,
+                anchor.font_size,
+            )?;
+            Some(ReconstructedHeading {
+                level: *level,
+                original: original.clone(),
+                text,
+                inserted_words,
+                detached_context,
+            })
+        }) else {
+            continue;
+        };
+        repairs.push(repair);
+    }
+    repairs
+}
+
+fn detached_fragment_context(
+    spans: &[TextSpan],
+    inserted_words: &[String],
+    heading_font: &str,
+    heading_size: f32,
+) -> Option<String> {
+    let expected: Vec<String> = inserted_words
+        .iter()
+        .map(|word| normalized_heading_token(word))
+        .collect();
+    let mut contexts = Vec::new();
+    for start in 0..spans.len() {
+        let first = &spans[start];
+        if first.font_name != heading_font
+            || (first.font_size - heading_size).abs() > heading_size * 0.05
+            || normalized_heading_token(&first.text) != expected[0]
+        {
+            continue;
+        }
+        let mut expected_index = 0usize;
+        let mut cursor = start;
+        while cursor < spans.len() && expected_index < expected.len() {
+            let span = &spans[cursor];
+            let token = normalized_heading_token(&span.text);
+            if token.is_empty() {
+                cursor += 1;
+                continue;
+            }
+            if span.font_name != heading_font
+                || (span.font_size - heading_size).abs() > heading_size * 0.05
+                || token != expected[expected_index]
+            {
+                break;
+            }
+            expected_index += 1;
+            cursor += 1;
+        }
+        if expected_index != expected.len() {
+            continue;
+        }
+        let Some(previous) = spans[..start]
+            .iter()
+            .rev()
+            .find(|span| !span.text.trim().is_empty())
+        else {
+            continue;
+        };
+        if previous.font_name == heading_font {
+            continue;
+        }
+        let context = bounded_text_suffix(previous.text.trim(), 96);
+        if context
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .count()
+            >= 8
+        {
+            contexts.push(context);
+        }
+    }
+    (contexts.len() == 1).then(|| contexts.remove(0))
+}
+
+fn bounded_text_suffix(value: &str, maximum_characters: usize) -> String {
+    let mut characters: Vec<char> = value.chars().rev().take(maximum_characters).collect();
+    characters.reverse();
+    characters
+        .into_iter()
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn normalized_heading_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -652,6 +904,336 @@ pub(super) fn rect_vertical_gap(left: Rect, right: Rect) -> f32 {
     } else {
         0.0
     }
+}
+
+pub(super) fn table_row_headings(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    headings: &[(u8, String)],
+) -> Vec<(u8, String)> {
+    const MAX_HEADINGS: usize = 128;
+    const MAX_ANCHORS: usize = 8;
+    const MAX_ROW_SPANS: usize = 64;
+    if spans.len() > MAX_TITLE_SPANS
+        || headings.len() > MAX_HEADINGS
+        || !page_bounds.x.is_finite()
+        || !page_bounds.y.is_finite()
+        || !page_bounds.width.is_finite()
+        || !page_bounds.height.is_finite()
+        || page_bounds.width <= 0.0
+        || page_bounds.height <= 0.0
+    {
+        return Vec::new();
+    }
+
+    let body_font_size = median_body_font_size(spans);
+    let midpoint = page_bounds.x + page_bounds.width * 0.5;
+    let mut table_headings = Vec::new();
+    for (level, heading) in headings {
+        let heading_words: Vec<String> = heading
+            .split_whitespace()
+            .map(normalized_heading_token)
+            .filter(|word| !word.is_empty())
+            .collect();
+        if heading_words.len() < 2 {
+            continue;
+        }
+        let anchor_indices: Vec<usize> = spans
+            .iter()
+            .enumerate()
+            .filter(|(_, span)| normalized_heading_token(&span.text) == heading_words[0])
+            .map(|(index, _)| index)
+            .take(MAX_ANCHORS + 1)
+            .collect();
+        if anchor_indices.len() > MAX_ANCHORS {
+            continue;
+        }
+
+        let is_table_fragment = anchor_indices.into_iter().any(|anchor_index| {
+            let anchor = &spans[anchor_index];
+            if anchor.artifact_type.is_some()
+                || anchor.rotation_degrees.abs() >= 1.0
+                || anchor.font_weight < FontWeight::Medium
+                || anchor.font_size < body_font_size * 0.8
+                || anchor.font_size > body_font_size * 1.15
+            {
+                return false;
+            }
+            let (column_left, column_right) = if anchor.bbox.x + anchor.bbox.width * 0.5 < midpoint
+            {
+                (page_bounds.x, midpoint)
+            } else {
+                (midpoint, page_bounds.x + page_bounds.width)
+            };
+            let mut row_indices: Vec<usize> = spans
+                .iter()
+                .enumerate()
+                .filter(|(_, span)| {
+                    span.artifact_type.is_none()
+                        && span.rotation_degrees.abs() < 1.0
+                        && span.font_name == anchor.font_name
+                        && (span.font_weight == anchor.font_weight || span.text.trim().is_empty())
+                        && span.is_italic == anchor.is_italic
+                        && (span.font_size - anchor.font_size).abs() <= body_font_size * 0.05
+                        && (span.bbox.y - anchor.bbox.y).abs() <= body_font_size * 0.2
+                        && span.bbox.x >= column_left
+                        && span.bbox.x + span.bbox.width <= column_right
+                })
+                .map(|(index, _)| index)
+                .take(MAX_ROW_SPANS + 1)
+                .collect();
+            if row_indices.len() > MAX_ROW_SPANS {
+                return false;
+            }
+            row_indices.sort_by(|left, right| spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x));
+            let row_words: Vec<String> = row_indices
+                .iter()
+                .flat_map(|index| spans[*index].text.split_whitespace())
+                .map(normalized_heading_token)
+                .filter(|word| !word.is_empty())
+                .collect();
+            let Some(start) = row_words
+                .windows(heading_words.len())
+                .position(|window| window == heading_words)
+            else {
+                return false;
+            };
+            row_words[..start]
+                .iter()
+                .chain(&row_words[start + heading_words.len()..])
+                .any(|word| {
+                    word.chars()
+                        .filter(|character| character.is_alphabetic())
+                        .count()
+                        >= 3
+                })
+        });
+        if is_table_fragment {
+            table_headings.push((*level, heading.clone()));
+        }
+    }
+    table_headings
+}
+
+pub(super) fn positioned_run_in_headings(spans: &[TextSpan], page_bounds: Rect) -> Vec<String> {
+    const MAX_HEADING_SPANS: usize = 32;
+    const MAX_HEADINGS_PER_PAGE: usize = 128;
+    let body_font_size = median_body_font_size(spans);
+    let midpoint = page_bounds.x + page_bounds.width * 0.5;
+    let mut left_content_x = f32::INFINITY;
+    let mut right_content_x = f32::INFINITY;
+    let mut font_character_counts = HashMap::<&str, usize>::new();
+
+    for span in spans.iter().filter(|span| {
+        span.artifact_type.is_none()
+            && span.rotation_degrees.abs() < 1.0
+            && !span.text.trim().is_empty()
+            && span.text.chars().any(char::is_alphabetic)
+            && span.font_size >= body_font_size * 0.8
+            && span.font_size <= body_font_size * 1.3
+            && span.bbox.x.is_finite()
+    }) {
+        if span.bbox.x >= midpoint {
+            right_content_x = right_content_x.min(span.bbox.x);
+        } else {
+            left_content_x = left_content_x.min(span.bbox.x);
+        }
+        let letters = span
+            .text
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .count();
+        *font_character_counts.entry(&span.font_name).or_default() += letters;
+    }
+    let dominant_body_font = font_character_counts
+        .into_iter()
+        .max_by(|(left_font, left_count), (right_font, right_count)| {
+            left_count
+                .cmp(right_count)
+                .then_with(|| left_font.cmp(right_font))
+        })
+        .map(|(font, _)| font)
+        .unwrap_or_default();
+
+    let mut headings = Vec::new();
+    let mut index = 0usize;
+    while index < spans.len() && headings.len() < MAX_HEADINGS_PER_PAGE {
+        let first = &spans[index];
+        if !positioned_heading_span_is_usable(first, body_font_size) {
+            index += 1;
+            continue;
+        }
+
+        let mut run_end = index + 1;
+        let mut run_right = first.bbox.x + first.bbox.width;
+        while run_end < spans.len() && run_end - index < MAX_HEADING_SPANS {
+            let candidate = &spans[run_end];
+            if !same_styled_text_row(first, candidate, body_font_size)
+                || candidate.bbox.x > run_right + body_font_size
+            {
+                break;
+            }
+            run_right = run_right.max(candidate.bbox.x + candidate.bbox.width);
+            run_end += 1;
+        }
+
+        let Some(next_index) = (run_end..spans.len())
+            .take(8)
+            .find(|candidate| !spans[*candidate].text.trim().is_empty())
+        else {
+            index = run_end;
+            continue;
+        };
+        let next = &spans[next_index];
+        let column_left = if first.bbox.x + first.bbox.width * 0.5 >= midpoint {
+            right_content_x
+        } else {
+            left_content_x
+        };
+        let baseline_delta = first.bbox.y - next.bbox.y;
+        let body_follows_same_line = baseline_delta.abs() <= body_font_size * 0.25
+            && next.bbox.x + body_font_size * 0.25 >= run_right
+            && next.bbox.x <= run_right + body_font_size * 2.0;
+        let body_follows_next_line = baseline_delta > body_font_size * 0.25
+            && baseline_delta <= body_font_size * 1.8
+            && next.bbox.x <= column_left + body_font_size * 1.6;
+        if !column_left.is_finite()
+            || first.bbox.x > column_left + body_font_size * 1.6
+            || (!body_follows_same_line && !body_follows_next_line)
+            || (first.font_name == next.font_name
+                && first.font_weight == next.font_weight
+                && first.is_italic == next.is_italic)
+            || next
+                .text
+                .chars()
+                .filter(|character| character.is_alphabetic())
+                .count()
+                < 2
+        {
+            index = run_end;
+            continue;
+        }
+
+        let text = spans[index..run_end]
+            .iter()
+            .map(|span| span.text.trim())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let run_is_heavier = first.font_weight > next.font_weight;
+        let run_has_distinct_style = first.font_name != dominant_body_font || run_is_heavier;
+        if run_has_distinct_style && is_positioned_run_in_heading_text(&text, run_is_heavier) {
+            headings.push(text);
+        }
+        index = run_end;
+    }
+    headings
+}
+
+fn positioned_heading_span_is_usable(span: &TextSpan, body_font_size: f32) -> bool {
+    span.artifact_type.is_none()
+        && span.rotation_degrees.abs() < 1.0
+        && !span.text.trim().is_empty()
+        && span.font_size >= body_font_size * 0.8
+        && span.font_size <= body_font_size * 1.3
+        && span.bbox.x.is_finite()
+        && span.bbox.y.is_finite()
+        && span.bbox.width.is_finite()
+        && span.bbox.width > 0.0
+}
+
+fn same_styled_text_row(first: &TextSpan, candidate: &TextSpan, body_font_size: f32) -> bool {
+    candidate.artifact_type.is_none()
+        && candidate.rotation_degrees.abs() < 1.0
+        && candidate.font_size >= body_font_size * 0.8
+        && candidate.font_size <= body_font_size * 1.3
+        && candidate.bbox.x.is_finite()
+        && candidate.bbox.y.is_finite()
+        && candidate.bbox.width.is_finite()
+        && candidate.bbox.width >= 0.0
+        && first.font_name == candidate.font_name
+        && first.is_italic == candidate.is_italic
+        && (first.font_size - candidate.font_size).abs() <= body_font_size * 0.05
+        && (first.bbox.y - candidate.bbox.y).abs() <= body_font_size * 0.2
+}
+
+fn is_positioned_run_in_heading_text(text: &str, run_is_heavier: bool) -> bool {
+    const NON_SECTION_LABELS: &[&str] = &[
+        "ALGORITHM",
+        "CAUTION",
+        "DEFINITION",
+        "EQUATION",
+        "EXAMPLE",
+        "FIGURE",
+        "IMPORTANT",
+        "LEMMA",
+        "NOTE",
+        "PROOF",
+        "REMARK",
+        "TABLE",
+        "THEOREM",
+        "WARNING",
+    ];
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let letter_count = text
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    let starts_uppercase = text
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_alphabetic() && character.is_uppercase());
+    let starts_with_section_number = words.first().is_some_and(|word| {
+        let mut components = word.split('.');
+        let Some(first) = components.next() else {
+            return false;
+        };
+        let rest: Vec<&str> = components.collect();
+        !rest.is_empty()
+            && first.chars().all(|character| character.is_ascii_digit())
+            && rest.iter().all(|component| {
+                !component.is_empty()
+                    && component
+                        .chars()
+                        .all(|character| character.is_ascii_digit())
+            })
+    });
+    let first_label = words.first().map(|word| {
+        word.trim_matches(|character: char| !character.is_alphabetic())
+            .to_uppercase()
+    });
+    let contains_acronym = words.iter().any(|word| {
+        let letters: String = word
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .collect();
+        letters.len() >= 2 && letters.chars().all(|character| character.is_uppercase())
+    });
+
+    let substantial_words = words
+        .iter()
+        .filter(|word| {
+            word.chars()
+                .filter(|character| character.is_alphabetic())
+                .count()
+                >= 3
+        })
+        .count();
+    let punctuated_label = text.ends_with(['.', ':']) && !contains_acronym;
+    let multipart_label = run_is_heavier
+        && !text.ends_with(['.', ':', ';', ','])
+        && words.len() >= 2
+        && substantial_words >= 2;
+
+    (punctuated_label || multipart_label)
+        && (4..=96).contains(&letter_count)
+        && words.len() <= 10
+        && (starts_uppercase || starts_with_section_number)
+        && !first_label
+            .as_deref()
+            .is_some_and(|label| NON_SECTION_LABELS.contains(&label))
 }
 
 pub(super) fn median_body_font_size(spans: &[TextSpan]) -> f32 {

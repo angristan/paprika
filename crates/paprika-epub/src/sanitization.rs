@@ -200,6 +200,7 @@ fn promote_run_in_section_headings(html: &mut String) {
     let source = std::mem::take(html);
     let mut output = String::with_capacity(source.len());
     let mut search_from = 0usize;
+    let mut container_depth = 0usize;
 
     while let Some(relative_start) = source[search_from..].find(PARAGRAPH_START) {
         let paragraph_start = search_from + relative_start;
@@ -211,20 +212,27 @@ fn promote_run_in_section_headings(html: &mut String) {
         let paragraph_end = content_end + PARAGRAPH_END.len();
         let content = &source[content_start..content_end];
 
-        output.push_str(&source[search_from..paragraph_start]);
-        if let Some((prefix_end, heading)) = leading_strong_prefix(content)
-            && is_section_heading(&heading)
+        let prefix = &source[search_from..paragraph_start];
+        update_container_depth(prefix, &mut container_depth);
+        output.push_str(prefix);
+        let mut promoted = false;
+        if container_depth == 0
+            && let Some(strong_prefix) = leading_strong_prefix(content)
         {
-            let body = content[prefix_end..].trim_start();
-            output.push_str("<h2>");
-            output.push_str(&escape_xml(&heading));
-            output.push_str("</h2>");
-            if !body.is_empty() {
-                output.push_str("\n<p>");
-                output.push_str(body);
-                output.push_str(PARAGRAPH_END);
+            let body = content[strong_prefix.end..].trim_start();
+            if is_section_heading(&strong_prefix, body) {
+                output.push_str("<h2>");
+                output.push_str(&escape_xml(promoted_heading_text(&strong_prefix.text)));
+                output.push_str("</h2>");
+                if !body.is_empty() {
+                    output.push_str("\n<p>");
+                    output.push_str(body);
+                    output.push_str(PARAGRAPH_END);
+                }
+                promoted = true;
             }
-        } else {
+        }
+        if !promoted {
             output.push_str(&source[paragraph_start..paragraph_end]);
         }
         search_from = paragraph_end;
@@ -234,7 +242,380 @@ fn promote_run_in_section_headings(html: &mut String) {
     *html = output;
 }
 
-fn leading_strong_prefix(content: &str) -> Option<(usize, String)> {
+pub(super) fn demote_heading(html: &mut String, level: u8, heading: &str) -> bool {
+    if !(1..=6).contains(&level) {
+        return false;
+    }
+    let heading = escape_xml(heading);
+    let source = format!("<h{level}>{heading}</h{level}>");
+    let matches: Vec<usize> = html.match_indices(&source).map(|(at, _)| at).collect();
+    if matches.len() != 1 {
+        return false;
+    }
+    let replacement = format!("<p><strong>{heading}</strong></p>");
+    html.replace_range(matches[0]..matches[0] + source.len(), &replacement);
+    true
+}
+
+pub(super) fn apply_reconstructed_heading(
+    html: &mut String,
+    level: u8,
+    original: &str,
+    reconstructed: &str,
+    inserted_words: &[String],
+    detached_context: &str,
+) -> bool {
+    if !(1..=6).contains(&level) || inserted_words.is_empty() || inserted_words.len() > 4 {
+        return false;
+    }
+    let original_markup = format!("<h{level}>{}</h{level}>", escape_xml(original));
+    let reconstructed_markup = format!("<h{level}>{}</h{level}>", escape_xml(reconstructed));
+    let detached_markup = inserted_words
+        .iter()
+        .map(|word| format!("<strong>{}</strong>", escape_xml(word)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let escaped_context = escape_xml(detached_context);
+    let original_matches: Vec<usize> = html
+        .match_indices(&original_markup)
+        .map(|(at, _)| at)
+        .collect();
+    let detached_matches: Vec<usize> = html
+        .match_indices(&escaped_context)
+        .filter_map(|(context_start, _)| {
+            let remainder_start = context_start + escaped_context.len();
+            let remainder = &html[remainder_start..];
+            let whitespace_bytes = remainder
+                .char_indices()
+                .take_while(|(_, character)| character.is_whitespace())
+                .take(8)
+                .last()
+                .map_or(0, |(offset, character)| offset + character.len_utf8());
+            remainder[whitespace_bytes..]
+                .starts_with(&detached_markup)
+                .then_some(remainder_start + whitespace_bytes)
+        })
+        .collect();
+    if original_matches.len() != 1 || detached_matches.len() != 1 {
+        return false;
+    }
+    let detached_start = detached_matches[0];
+
+    let mut replacements = vec![
+        (
+            original_matches[0],
+            original_matches[0] + original_markup.len(),
+            reconstructed_markup,
+        ),
+        (
+            detached_start,
+            detached_start + detached_markup.len(),
+            String::new(),
+        ),
+    ];
+    replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0));
+    for (start, end, replacement) in replacements {
+        html.replace_range(start..end, &replacement);
+    }
+    true
+}
+
+pub(super) fn promote_positioned_run_in_headings(html: &mut String, headings: &[String]) {
+    const PARAGRAPH_START: &str = "<p>";
+    const PARAGRAPH_END: &str = "</p>";
+    if headings.is_empty() {
+        return;
+    }
+
+    let source = std::mem::take(html);
+    let encoded_headings: Vec<(&str, String)> = headings
+        .iter()
+        .map(|heading| (heading.as_str(), escape_xml(heading)))
+        .collect();
+    let plain_heading_counts = positioned_plain_heading_counts(&source, &encoded_headings);
+    let strong_heading_counts = positioned_strong_heading_counts(&source, &encoded_headings);
+    let heading_occurrence_counts: Vec<usize> = plain_heading_counts
+        .iter()
+        .zip(&strong_heading_counts)
+        .map(|(plain, strong)| plain.saturating_add(*strong))
+        .collect();
+    let unique_plain_headings: Vec<(&str, String)> = encoded_headings
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            plain_heading_counts[*index] == 1 && heading_occurrence_counts[*index] == 1
+        })
+        .map(|(_, heading)| heading.clone())
+        .collect();
+
+    let mut output = String::with_capacity(source.len() + encoded_headings.len() * 16);
+    let mut search_from = 0usize;
+    let mut container_depth = 0usize;
+    while let Some(relative_start) = source[search_from..].find(PARAGRAPH_START) {
+        let paragraph_start = search_from + relative_start;
+        let content_start = paragraph_start + PARAGRAPH_START.len();
+        let Some(relative_end) = source[content_start..].find(PARAGRAPH_END) else {
+            break;
+        };
+        let content_end = content_start + relative_end;
+        let paragraph_end = content_end + PARAGRAPH_END.len();
+        let content = &source[content_start..content_end];
+        let prefix = &source[search_from..paragraph_start];
+        update_container_depth(prefix, &mut container_depth);
+        output.push_str(prefix);
+
+        let positioned_strong = (container_depth == 0).then(|| {
+            positioned_strong_heading_match(content, &encoded_headings, &heading_occurrence_counts)
+        });
+        if let Some(Some(positioned)) = positioned_strong {
+            let prefix_end = positioned.start + positioned.prefix.end;
+            let body = content[prefix_end..].trim_start();
+            push_paragraph_fragment(&mut output, &content[..positioned.start]);
+            output.push_str("<h2>");
+            output.push_str(&escape_xml(
+                positioned
+                    .heading
+                    .trim_end_matches(['.', ':', ';', ','])
+                    .trim_end(),
+            ));
+            output.push_str("</h2>");
+            if !body.is_empty() {
+                output.push_str("\n<p>");
+                output.push_str(body);
+                output.push_str(PARAGRAPH_END);
+            }
+        } else {
+            let mut matches = if container_depth == 0 && !content.contains(['<', '>']) {
+                positioned_heading_matches(content, &unique_plain_headings)
+            } else {
+                Vec::new()
+            };
+            if matches.is_empty() {
+                output.push_str(&source[paragraph_start..paragraph_end]);
+            } else {
+                matches.sort_by_key(|candidate| candidate.start);
+                let mut cursor = 0usize;
+                for candidate in matches {
+                    if candidate.start < cursor {
+                        continue;
+                    }
+                    push_paragraph_fragment(&mut output, &content[cursor..candidate.start]);
+                    output.push_str("<h2>");
+                    output.push_str(&escape_xml(
+                        candidate
+                            .heading
+                            .trim_end_matches(['.', ':', ';', ','])
+                            .trim_end(),
+                    ));
+                    output.push_str("</h2>\n");
+                    cursor = candidate.end;
+                }
+                push_paragraph_fragment(&mut output, &content[cursor..]);
+                if output.ends_with('\n') {
+                    output.pop();
+                }
+            }
+        }
+        search_from = paragraph_end;
+    }
+
+    output.push_str(&source[search_from..]);
+    *html = output;
+}
+
+struct PositionedStrongHeadingMatch<'a> {
+    start: usize,
+    prefix: StrongPrefix,
+    heading: &'a str,
+}
+
+fn positioned_plain_heading_counts(source: &str, headings: &[(&str, String)]) -> Vec<usize> {
+    const PARAGRAPH_START: &str = "<p>";
+    const PARAGRAPH_END: &str = "</p>";
+    let mut counts = vec![0usize; headings.len()];
+    let mut search_from = 0usize;
+    let mut container_depth = 0usize;
+    while let Some(relative_start) = source[search_from..].find(PARAGRAPH_START) {
+        let paragraph_start = search_from + relative_start;
+        let content_start = paragraph_start + PARAGRAPH_START.len();
+        let Some(relative_end) = source[content_start..].find(PARAGRAPH_END) else {
+            break;
+        };
+        let content_end = content_start + relative_end;
+        let paragraph_end = content_end + PARAGRAPH_END.len();
+        update_container_depth(&source[search_from..paragraph_start], &mut container_depth);
+        let content = &source[content_start..content_end];
+        if container_depth == 0 && !content.contains(['<', '>']) {
+            for (index, (_, escaped)) in headings.iter().enumerate() {
+                counts[index] = counts[index].saturating_add(content.matches(escaped).count());
+            }
+        }
+        search_from = paragraph_end;
+    }
+    counts
+}
+
+fn positioned_strong_heading_counts(source: &str, headings: &[(&str, String)]) -> Vec<usize> {
+    const PARAGRAPH_START: &str = "<p>";
+    const PARAGRAPH_END: &str = "</p>";
+    let mut counts = vec![0usize; headings.len()];
+    let mut search_from = 0usize;
+    let mut container_depth = 0usize;
+    while let Some(relative_start) = source[search_from..].find(PARAGRAPH_START) {
+        let paragraph_start = search_from + relative_start;
+        let content_start = paragraph_start + PARAGRAPH_START.len();
+        let Some(relative_end) = source[content_start..].find(PARAGRAPH_END) else {
+            break;
+        };
+        let content_end = content_start + relative_end;
+        let paragraph_end = content_end + PARAGRAPH_END.len();
+        update_container_depth(&source[search_from..paragraph_start], &mut container_depth);
+        if container_depth == 0 {
+            visit_strong_prefixes(&source[content_start..content_end], |_, prefix| {
+                for (index, (heading, _)) in headings.iter().enumerate() {
+                    if *heading == prefix.text {
+                        counts[index] = counts[index].saturating_add(1);
+                    }
+                }
+            });
+        }
+        search_from = paragraph_end;
+    }
+    counts
+}
+
+fn positioned_strong_heading_match<'a>(
+    content: &str,
+    headings: &'a [(&'a str, String)],
+    counts: &[usize],
+) -> Option<PositionedStrongHeadingMatch<'a>> {
+    let mut matched = None;
+    let mut ambiguous = false;
+    visit_strong_prefixes(content, |start, prefix| {
+        let Some((heading, _)) = headings
+            .iter()
+            .enumerate()
+            .find(|(index, (heading, _))| counts[*index] == 1 && *heading == prefix.text)
+            .map(|(_, heading)| heading)
+        else {
+            return;
+        };
+        if matched.is_some() {
+            ambiguous = true;
+        } else {
+            matched = Some(PositionedStrongHeadingMatch {
+                start,
+                prefix,
+                heading,
+            });
+        }
+    });
+    (!ambiguous).then_some(matched).flatten()
+}
+
+fn visit_strong_prefixes(content: &str, mut visitor: impl FnMut(usize, StrongPrefix)) {
+    const STRONG_START: &str = "<strong>";
+    let mut cursor = 0usize;
+    let mut depth_cursor = 0usize;
+    let mut inline_depth = 0usize;
+    while let Some(relative_start) = content[cursor..].find(STRONG_START) {
+        let start = cursor + relative_start;
+        update_inline_depth(&content[depth_cursor..start], &mut inline_depth);
+        if inline_depth == 0
+            && let Some(prefix) = leading_strong_prefix(&content[start..])
+        {
+            let next = start + prefix.end.max(STRONG_START.len());
+            visitor(start, prefix);
+            cursor = next;
+        } else {
+            cursor = start + STRONG_START.len();
+        }
+        depth_cursor = start;
+    }
+}
+
+fn update_inline_depth(fragment: &str, depth: &mut usize) {
+    const VOID_ELEMENTS: &[&str] = &["br", "hr", "img", "input"];
+    let mut cursor = 0usize;
+    while let Some(relative_start) = fragment[cursor..].find('<') {
+        let tag_start = cursor + relative_start;
+        let Some(relative_end) = fragment[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + relative_end;
+        let tag = fragment[tag_start + 1..tag_end].trim();
+        let closing = tag.starts_with('/');
+        let name_start = usize::from(closing);
+        let name = tag[name_start..]
+            .split(|character: char| character.is_whitespace() || character == '/')
+            .next()
+            .unwrap_or_default();
+        if !name.is_empty() && !tag.starts_with('!') && !tag.starts_with('?') {
+            if closing {
+                *depth = depth.saturating_sub(1);
+            } else if !tag.ends_with('/') && !VOID_ELEMENTS.contains(&name) {
+                *depth = depth.saturating_add(1);
+            }
+        }
+        cursor = tag_end + 1;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PositionedHeadingMatch<'a> {
+    start: usize,
+    end: usize,
+    heading: &'a str,
+}
+
+fn positioned_heading_matches<'a>(
+    content: &str,
+    headings: &'a [(&'a str, String)],
+) -> Vec<PositionedHeadingMatch<'a>> {
+    let mut matches = Vec::new();
+    for (heading, escaped) in headings {
+        let Some(start) = content.find(escaped) else {
+            continue;
+        };
+        let end = start + escaped.len();
+        let starts_at_boundary = start == 0
+            || content[..start]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace);
+        let ends_at_boundary = end == content.len()
+            || content[end..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace);
+        if starts_at_boundary && ends_at_boundary {
+            matches.push(PositionedHeadingMatch {
+                start,
+                end,
+                heading,
+            });
+        }
+    }
+    matches
+}
+
+fn push_paragraph_fragment(output: &mut String, fragment: &str) {
+    let fragment = fragment.trim();
+    if !fragment.is_empty() {
+        output.push_str("<p>");
+        output.push_str(fragment);
+        output.push_str("</p>\n");
+    }
+}
+
+#[derive(Debug)]
+struct StrongPrefix {
+    end: usize,
+    text: String,
+    parts: Vec<String>,
+}
+
+fn leading_strong_prefix(content: &str) -> Option<StrongPrefix> {
     const STRONG_START: &str = "<strong>";
     const STRONG_END: &str = "</strong>";
     const MAX_HEADING_PARTS: usize = 10;
@@ -263,10 +644,14 @@ fn leading_strong_prefix(content: &str) -> Option<(usize, String)> {
         cursor += content[cursor..].len() - content[cursor..].trim_start().len();
     }
 
-    (!parts.is_empty()).then(|| (cursor, parts.join(" ")))
+    (!parts.is_empty()).then(|| StrongPrefix {
+        end: cursor,
+        text: parts.join(" "),
+        parts,
+    })
 }
 
-fn is_section_heading(text: &str) -> bool {
+fn is_section_heading(prefix: &StrongPrefix, body: &str) -> bool {
     const NON_SECTION_LABELS: &[&str] = &[
         "ALGORITHM",
         "CAUTION",
@@ -283,7 +668,7 @@ fn is_section_heading(text: &str) -> bool {
         "THEOREM",
         "WARNING",
     ];
-    let text = text.trim();
+    let text = prefix.text.trim();
     let words: Vec<&str> = text.split_whitespace().collect();
     let letter_count = text
         .chars()
@@ -319,7 +704,150 @@ fn is_section_heading(text: &str) -> bool {
             .filter(|character| character.is_alphabetic())
             .all(|character| !character.is_lowercase());
     let is_plausible_unnumbered_heading = is_uppercase && (words.len() > 1 || letter_count >= 7);
-    starts_with_number || is_plausible_unnumbered_heading
+    if starts_with_number || is_plausible_unnumbered_heading {
+        return true;
+    }
+
+    if is_appendix_heading(prefix, body) {
+        return true;
+    }
+
+    let normalized = normalized_heading_label(text);
+    let is_known_label = matches!(
+        normalized.as_str(),
+        "ABSTRACT" | "ACKNOWLEDGEMENTS" | "ACKNOWLEDGMENTS" | "DECODER" | "ENCODER"
+    );
+    let body_summary = visible_text_summary(body, 256);
+    is_known_label && body_summary.letters >= 24 && body_summary.words >= 5
+}
+
+fn is_appendix_heading(prefix: &StrongPrefix, body: &str) -> bool {
+    if !body.trim().is_empty() || prefix.parts.len() < 3 {
+        return false;
+    }
+    let mut words = prefix.text.split_whitespace();
+    let Some(designator) = words.next() else {
+        return false;
+    };
+    let remaining: Vec<&str> = words.collect();
+    remaining.len() >= 2
+        && is_appendix_designator(designator)
+        && remaining
+            .iter()
+            .find_map(|word| word.chars().find(|character| character.is_alphabetic()))
+            .is_some_and(char::is_uppercase)
+}
+
+fn is_appendix_designator(value: &str) -> bool {
+    let mut components = value.split('.');
+    let Some(section) = components.next() else {
+        return false;
+    };
+    if section.len() != 1 || !section.as_bytes()[0].is_ascii_uppercase() {
+        return false;
+    }
+    components.all(|component| {
+        !component.is_empty()
+            && component
+                .chars()
+                .all(|character| character.is_ascii_digit())
+    })
+}
+
+fn promoted_heading_text(text: &str) -> &str {
+    if matches!(
+        normalized_heading_label(text).as_str(),
+        "ABSTRACT" | "ACKNOWLEDGEMENTS" | "ACKNOWLEDGMENTS" | "DECODER" | "ENCODER"
+    ) {
+        text.trim_end_matches(['.', ':', ';', ',']).trim_end()
+    } else {
+        text
+    }
+}
+
+fn normalized_heading_label(text: &str) -> String {
+    text.trim()
+        .trim_end_matches(['.', ':', ';', ','])
+        .to_uppercase()
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct VisibleTextSummary {
+    letters: usize,
+    words: usize,
+}
+
+fn visible_text_summary(markup: &str, maximum_visible_characters: usize) -> VisibleTextSummary {
+    let mut summary = VisibleTextSummary::default();
+    let mut inside_tag = false;
+    let mut inside_entity = false;
+    let mut inside_word = false;
+    let mut visible_characters = 0usize;
+
+    for character in markup.chars() {
+        match character {
+            '<' if !inside_entity => {
+                inside_tag = true;
+                inside_word = false;
+                continue;
+            }
+            '>' if inside_tag => {
+                inside_tag = false;
+                continue;
+            }
+            '&' if !inside_tag => {
+                inside_entity = true;
+                inside_word = false;
+                continue;
+            }
+            ';' if inside_entity => {
+                inside_entity = false;
+                visible_characters += 1;
+            }
+            _ if inside_tag || inside_entity => continue,
+            _ => visible_characters += 1,
+        }
+        if visible_characters > maximum_visible_characters {
+            break;
+        }
+        if character.is_alphabetic() {
+            summary.letters += 1;
+            if !inside_word {
+                summary.words += 1;
+                inside_word = true;
+            }
+        } else {
+            inside_word = false;
+        }
+    }
+    summary
+}
+
+fn update_container_depth(fragment: &str, depth: &mut usize) {
+    const CONTAINERS: &[&str] = &["blockquote", "div", "figure", "li", "td", "th"];
+    let mut cursor = 0usize;
+    while let Some(relative_start) = fragment[cursor..].find('<') {
+        let tag_start = cursor + relative_start;
+        let Some(relative_end) = fragment[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + relative_end;
+        let tag = fragment[tag_start + 1..tag_end].trim();
+        let closing = tag.starts_with('/');
+        let name_start = usize::from(closing);
+        let name = tag[name_start..]
+            .split(|character: char| character.is_whitespace() || character == '/')
+            .next()
+            .unwrap_or_default();
+        if CONTAINERS.contains(&name) {
+            if closing {
+                *depth = depth.saturating_sub(1);
+            } else if !tag.ends_with('/') {
+                *depth = depth.saturating_add(1);
+            }
+        }
+        cursor = tag_end + 1;
+    }
 }
 
 fn safe_link_destination(destination: CowStr<'_>) -> CowStr<'_> {

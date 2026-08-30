@@ -9,7 +9,8 @@ use crate::figures::{
     figure_graphic_region, page_may_have_figure_caption, tighten_regions_from_graphics,
 };
 use crate::geometry::{
-    MAX_TITLE_SPANS, overlap_fraction, reconstruct_document_title, visual_page_regions,
+    MAX_TITLE_SPANS, overlap_fraction, positioned_run_in_headings, reconstruct_document_title,
+    reconstruct_split_headings, table_row_headings, visual_page_regions,
 };
 use crate::images::{
     ImageDecodeBudget, account_image_objects, image_recovery_plan, reserve_image_decode,
@@ -18,12 +19,13 @@ use crate::math::{is_math_dense_candidate, math_extraction_is_unreliable, trustw
 use crate::model::{ImagePlacement, PageImage, SemanticPage};
 use crate::packaging::{build_epub_preview, package_epub};
 use crate::sanitization::{
-    enhance_algorithm_blocks, escape_xml, markdown_to_xhtml, no_text_warning, normalized_language,
-    normalized_title, replace_caption_paragraph_with_figure, replace_equation_anchor_with_image,
-    xhtml_document,
+    apply_reconstructed_heading, demote_heading, enhance_algorithm_blocks, escape_xml,
+    markdown_to_xhtml, no_text_warning, normalized_language, normalized_title,
+    promote_positioned_run_in_headings, replace_caption_paragraph_with_figure,
+    replace_equation_anchor_with_image, xhtml_document,
 };
 use pdf_oxide::geometry::Rect;
-use pdf_oxide::layout::TextSpan;
+use pdf_oxide::layout::{FontWeight, TextSpan};
 use rbook::Epub;
 use std::collections::HashSet;
 use std::io::Write;
@@ -52,18 +54,141 @@ fn separates_run_in_section_headings_from_body_text() {
         )
     );
     assert!(html.contains("<h2>ACKNOWLEDGMENTS</h2>\n<p>We thank the contributors.</p>"));
+
+    let embedded = markdown_to_xhtml(
+        "Data-store pointer index **6.1** **Supporting** **External** **Data** **Stores** This section describes work stored outside the primary database.\n\nSee **6.1** **Supporting** **External** **Data** **Stores** before changing configuration.",
+    );
+    assert!(embedded.contains("Data-store pointer index <strong>6.1</strong>"));
+    assert!(embedded.contains("See <strong>6.1</strong>"));
+    assert!(!embedded.contains("<h2>6.1 Supporting External Data Stores</h2>"));
 }
 
 #[test]
-fn preserves_bold_lead_ins_and_figure_captions_as_paragraphs() {
+fn recovers_known_and_appendix_headings() {
     let html = markdown_to_xhtml(
-        "**Important** context remains inline.\n\n**NOTE** Keep this callout inline.\n\n**HTTP** requests remain prose.\n\n**FIGURE** **1:** Sample graph.",
+        "**Acknowledgements** We thank all contributors who helped improve this work.\n\n**A.1** **Illustration** **of** **the** **Pre-training** **Tasks**",
+    );
+    assert!(html.contains("<h2>Acknowledgements</h2>\n<p>We thank all contributors"));
+    assert!(html.contains("<h2>A.1 Illustration of the Pre-training Tasks</h2>"));
+}
+
+#[test]
+fn preserves_bold_lead_ins_captions_and_list_items() {
+    let html = markdown_to_xhtml(
+        "**Important** context remains inline.\n\n**Important** **Context** This note applies to every request in the system.\n\n**NOTE** Keep this callout inline.\n\n**HTTP** requests remain prose.\n\n**FIGURE** **1:** Sample graph.\n\n- **A** **INSTALLATION** **GUIDE**\n\n  Keep the loose-list body attached to its item.",
     );
     assert!(html.contains("<p><strong>Important</strong> context remains inline.</p>"));
+    assert!(
+        html.contains("<p><strong>Important</strong> <strong>Context</strong> This note applies")
+    );
     assert!(html.contains("<p><strong>NOTE</strong> Keep this callout inline.</p>"));
     assert!(html.contains("<p><strong>HTTP</strong> requests remain prose.</p>"));
     assert!(html.contains("<p><strong>FIGURE</strong> <strong>1:</strong> Sample graph.</p>"));
+    assert!(
+        html.contains("<strong>A</strong> <strong>INSTALLATION</strong> <strong>GUIDE</strong>")
+    );
     assert!(!html.contains("<h2>"));
+}
+
+#[test]
+fn promotes_only_typography_confirmed_plain_run_ins() {
+    let spans = vec![
+        test_span("Fairness.", 70.0, 500.0, 38.0, "Heading"),
+        test_span(
+            "Smaller tenants continue to receive enough processing capacity.",
+            112.0,
+            500.0,
+            280.0,
+            "Body",
+        ),
+        test_span("Ordinary body text.", 60.0, 480.0, 100.0, "Body"),
+        test_span("No NSP:", 70.0, 460.0, 40.0, "Heading"),
+        test_span(
+            "This model label must remain attached to its explanation.",
+            114.0,
+            460.0,
+            260.0,
+            "Body",
+        ),
+        bold_test_span("Masked", 70.0, 440.0, 35.0, "Heading"),
+        bold_test_span(
+            "LM and the Masking Procedure",
+            108.0,
+            440.0,
+            145.0,
+            "Heading",
+        ),
+        test_span("As-", 257.0, 440.0, 16.0, "Body"),
+        test_span(
+            "[13] Sepp Hochreiter and Jürgen Schmidhuber.",
+            60.0,
+            420.0,
+            210.0,
+            "Heading",
+        ),
+        test_span(
+            "Long short-term memory is the cited article title.",
+            274.0,
+            420.0,
+            210.0,
+            "Body",
+        ),
+        bold_sized_test_span("6.1", 70.0, 400.0, 18.0, 12.0, "Heading"),
+        bold_sized_test_span(
+            "Supporting External Data Stores",
+            91.0,
+            400.0,
+            170.0,
+            12.0,
+            "Heading",
+        ),
+        test_span(
+            "This section describes work stored outside the database.",
+            264.0,
+            400.0,
+            220.0,
+            "Body",
+        ),
+    ];
+    let headings = positioned_run_in_headings(&spans, Rect::new(0.0, 0.0, 500.0, 700.0));
+    assert_eq!(
+        headings,
+        vec![
+            "Fairness.",
+            "Masked LM and the Masking Procedure",
+            "6.1 Supporting External Data Stores",
+        ]
+    );
+
+    let mut html = "<p>Prior requirement. Fairness. Smaller tenants continue to receive enough processing capacity.</p>\n<p>No NSP: This model label must remain attached to its explanation.</p>\n<p>Masked LM and the Masking Procedure As-sume that one token is selected from the sentence.</p>".to_string();
+    promote_positioned_run_in_headings(&mut html, &headings);
+    assert!(html.contains("<p>Prior requirement.</p>\n<h2>Fairness</h2>\n<p>Smaller tenants"));
+    assert!(html.contains("<p>No NSP: This model label"));
+    assert!(html.contains("<h2>Masked LM and the Masking Procedure</h2>\n<p>As-sume that"));
+
+    let mut strong_html = "<p><strong>Masked</strong> <strong>LM</strong> <strong>and</strong> <strong>the</strong> <strong>Masking</strong> <strong>Procedure</strong> As-sume that one token is selected.</p>\n<p>Figure debris <strong>6.1</strong> <strong>Supporting</strong> <strong>External</strong> <strong>Data</strong> <strong>Stores</strong> This section describes work stored outside the database.</p>".to_string();
+    promote_positioned_run_in_headings(&mut strong_html, &headings);
+    assert!(strong_html.starts_with("<h2>Masked LM and the Masking Procedure</h2>\n<p>As-sume"));
+    assert!(strong_html.contains(
+        "<p>Figure debris</p>\n<h2>6.1 Supporting External Data Stores</h2>\n<p>This section describes"
+    ));
+
+    let mut duplicate = "<p><strong>Masked</strong> <strong>LM</strong> <strong>and</strong> <strong>the</strong> <strong>Masking</strong> <strong>Procedure</strong> First explanation.</p>\n<p><strong>Masked</strong> <strong>LM</strong> <strong>and</strong> <strong>the</strong> <strong>Masking</strong> <strong>Procedure</strong> Second explanation.</p>".to_string();
+    promote_positioned_run_in_headings(&mut duplicate, &headings);
+    assert!(!duplicate.contains("<h2>Masked LM"));
+
+    let mut mixed = "<p>Masked LM and the Masking Procedure Plain representation.</p>\n<p><strong>Masked</strong> <strong>LM</strong> <strong>and</strong> <strong>the</strong> <strong>Masking</strong> <strong>Procedure</strong> Bold representation.</p>".to_string();
+    promote_positioned_run_in_headings(&mut mixed, &headings);
+    assert!(!mixed.contains("<h2>Masked LM"));
+
+    let mut sole_strong = "<p><strong>Masked LM and the Masking Procedure</strong> One geometry-confirmed explanation.</p>".to_string();
+    promote_positioned_run_in_headings(&mut sole_strong, &headings);
+    assert!(sole_strong.starts_with("<h2>Masked LM and the Masking Procedure</h2>"));
+
+    let mut nested = "<p><a href=\"https://example.com\"><strong>Masked</strong> <strong>LM</strong> <strong>and</strong> <strong>the</strong> <strong>Masking</strong> <strong>Procedure</strong> linked text</a> remains prose.</p>".to_string();
+    let original_nested = nested.clone();
+    promote_positioned_run_in_headings(&mut nested, &headings);
+    assert_eq!(nested, original_nested);
 }
 
 #[test]
@@ -196,6 +321,140 @@ fn sized_test_span(text: &str, x: f32, y: f32, width: f32, font_size: f32, font:
         font_size,
         ..Default::default()
     }
+}
+
+fn bold_test_span(text: &str, x: f32, y: f32, width: f32, font: &str) -> TextSpan {
+    bold_sized_test_span(text, x, y, width, 10.0, font)
+}
+
+fn bold_sized_test_span(
+    text: &str,
+    x: f32,
+    y: f32,
+    width: f32,
+    font_size: f32,
+    font: &str,
+) -> TextSpan {
+    let mut span = sized_test_span(text, x, y, width, font_size, font);
+    span.font_weight = FontWeight::Bold;
+    span
+}
+
+#[test]
+fn demotes_a_table_column_misclassified_as_a_heading() {
+    let mut spans = vec![
+        bold_test_span("Parser", 206.0, 500.0, 29.0, "TableHeader"),
+        bold_test_span("Training", 334.0, 500.0, 37.0, "TableHeader"),
+        bold_test_span("WSJ", 414.0, 500.0, 21.0, "TableHeader"),
+        bold_test_span("23", 437.0, 500.0, 10.0, "TableHeader"),
+        bold_test_span("F1", 450.0, 500.0, 12.0, "TableHeader"),
+        bold_sized_test_span("7", 108.0, 450.0, 6.0, 12.0, "Section"),
+        bold_sized_test_span("Conclusion", 126.0, 450.0, 58.0, 12.0, "Section"),
+        bold_test_span("Section", 108.0, 470.0, 38.0, "Shared"),
+        bold_test_span("Heading", 150.0, 470.0, 40.0, "Shared"),
+        test_span(
+            "This regular prose shares the font family.",
+            194.0,
+            470.0,
+            210.0,
+            "Shared",
+        ),
+    ];
+    for offset in 0..8 {
+        spans.push(test_span(
+            "Ordinary body text in the paper.",
+            108.0,
+            430.0 - offset as f32 * 11.0,
+            390.0,
+            "Body",
+        ));
+    }
+    let headings = vec![
+        (2, "WSJ 23 F1".to_string()),
+        (2, "7 Conclusion".to_string()),
+        (2, "Section Heading".to_string()),
+    ];
+    assert_eq!(
+        table_row_headings(&spans, Rect::new(0.0, 0.0, 612.0, 792.0), &headings),
+        vec![(2, "WSJ 23 F1".to_string())]
+    );
+
+    let mut html = "<h2>WSJ 23 F1</h2>\n<h2>7 Conclusion</h2>".to_string();
+    assert!(demote_heading(&mut html, 2, "WSJ 23 F1"));
+    assert!(html.starts_with("<p><strong>WSJ 23 F1</strong></p>"));
+    assert_eq!(first_heading(&html).as_deref(), Some("7 Conclusion"));
+}
+
+#[test]
+fn reconstructs_a_split_section_heading_and_removes_its_fragment() {
+    let mut spans = vec![
+        bold_sized_test_span("4", 54.0, 500.0, 6.0, 12.0, "Heading"),
+        bold_sized_test_span("FOUNDATIONDB,", 70.0, 500.0, 90.0, 12.0, "Heading"),
+        bold_sized_test_span("THE", 164.0, 500.0, 23.0, 12.0, "Heading"),
+        bold_sized_test_span("AND", 70.0, 486.0, 25.0, 12.0, "Heading"),
+        bold_sized_test_span("CLOUDKIT", 98.0, 486.0, 58.0, 12.0, "Heading"),
+    ];
+    for offset in 0..8 {
+        spans.push(test_span(
+            "Ordinary body text for font-size estimation.",
+            54.0,
+            460.0 - offset as f32 * 11.0,
+            240.0,
+            "Body",
+        ));
+    }
+    spans.push(test_span(
+        "The Record Layer is designed to provide",
+        318.0,
+        260.0,
+        180.0,
+        "Body",
+    ));
+    spans.push(bold_sized_test_span(
+        "RECORD", 190.0, 500.0, 46.0, 12.0, "Heading",
+    ));
+    spans.push(bold_sized_test_span(
+        "LAYER", 239.0, 500.0, 35.0, 12.0, "Heading",
+    ));
+    let repairs = reconstruct_split_headings(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        &[(2, "4 FOUNDATIONDB, THE AND CLOUDKIT".to_string())],
+    );
+    assert_eq!(repairs.len(), 1);
+    assert_eq!(
+        repairs[0].text,
+        "4 FOUNDATIONDB, THE RECORD LAYER AND CLOUDKIT"
+    );
+    assert_eq!(repairs[0].inserted_words, ["RECORD", "LAYER"]);
+
+    assert_eq!(
+        repairs[0].detached_context,
+        "The Record Layer is designed to provide"
+    );
+
+    let mut unrelated = "<h2>4 FOUNDATIONDB, THE AND CLOUDKIT</h2>\n<p>Unrelated <strong>RECORD</strong> <strong>LAYER</strong></p>".to_string();
+    assert!(!apply_reconstructed_heading(
+        &mut unrelated,
+        repairs[0].level,
+        &repairs[0].original,
+        &repairs[0].text,
+        &repairs[0].inserted_words,
+        &repairs[0].detached_context,
+    ));
+    assert!(unrelated.contains("<strong>RECORD</strong>"));
+
+    let mut html = "<h2>4 FOUNDATIONDB, THE AND CLOUDKIT</h2>\n<p>The Record Layer is designed to provide <strong>RECORD</strong> <strong>LAYER</strong></p>".to_string();
+    assert!(apply_reconstructed_heading(
+        &mut html,
+        repairs[0].level,
+        &repairs[0].original,
+        &repairs[0].text,
+        &repairs[0].inserted_words,
+        &repairs[0].detached_context,
+    ));
+    assert!(html.contains("<h2>4 FOUNDATIONDB, THE RECORD LAYER AND CLOUDKIT</h2>"));
+    assert!(!html.contains("<strong>RECORD</strong>"));
 }
 
 #[test]

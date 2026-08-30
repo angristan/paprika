@@ -21,7 +21,8 @@ This document records the acceptance evidence for Paprika’s reliability work a
 | Preview security boundaries are conflated | Keep generated EPUB XHTML sanitized and sandboxed; use the documented browser-native boundary for local PDF blobs | Cross-browser test `uses the documented local PDF preview boundary` plus `docs/privacy.md` |
 | Narrow and zoomed layouts clip controls | Remove minimum viewport assumptions, bound native controls and fieldsets, and include actionable overflow diagnostics | Cross-browser tests `keeps the conversion workbench usable at 320 CSS pixels` and `remains usable at 200 percent zoom` |
 | A centered paper title is split by two-column reading order | Reconstruct only the first semantic heading from matching display-sized geometry; lower wrapped rows also require confirmation from the selected document title so bylines stay separate | Geometry tests cover split and wrapped titles, same-style bylines, malformed bounds, and independent columns; pinned QuiCK and BERT conversions assert the complete chapter/navigation title and reject detached fragments |
-| Bold run-in section headings merge into their first body paragraph | Promote bounded uppercase or numbered bold prefixes to semantic `h2` blocks while preserving captions and ordinary bold lead-ins | Unit tests cover section repair and false-positive guards; the pinned QuiCK check requires separate `CONCLUSIONS` and `ACKNOWLEDGMENTS` headings |
+| A wrapped section title loses words to column ordering | Reconstruct only bounded, same-style heading rows when the extracted heading is an ordered subset and the detached bold fragment is unique | Unit coverage and the pinned QuiCK conversion require the complete `4 FOUNDATIONDB, THE RECORD LAYER AND CLOUDKIT` heading and removal of its detached fragment |
+| Run-in section headings merge into their first body paragraph | Promote bounded uppercase, appendix, and typography-confirmed unique prefixes while preserving captions, list items, table values, citations, model labels, and ordinary bold lead-ins; demote geometry-confirmed table-row fragments | Unit tests cover recovery and false-positive guards; pinned QuiCK, Attention, BERT, and Bitcoin conversions assert heading/body boundaries and reject table/citation headings |
 
 The Rust tests intentionally exercise failures, races, bounds, and observable output rather than mirroring internal call sequences.
 
@@ -33,7 +34,7 @@ The local release gate was run from the feature worktree:
 bun run predeploy
   rustfmt: passed
   Clippy --workspace --all-targets -D warnings: passed
-  workspace tests: 67 passed (CLI 4, core 14, EPUB 43, PDF 6)
+  workspace tests: 71 passed (CLI 4, core 14, EPUB 47, PDF 6)
   wasm32-unknown-unknown check: passed
   browser JavaScript bundle/static-entry checks: passed
   bounded fuzz-target compilation: passed
