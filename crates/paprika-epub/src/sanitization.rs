@@ -190,7 +190,136 @@ pub(super) fn markdown_to_xhtml(markdown: &str) -> String {
     });
     let mut output = String::with_capacity(markdown.len() + markdown.len() / 8);
     html::push_html(&mut output, events);
+    promote_run_in_section_headings(&mut output);
     output
+}
+
+fn promote_run_in_section_headings(html: &mut String) {
+    const PARAGRAPH_START: &str = "<p>";
+    const PARAGRAPH_END: &str = "</p>";
+    let source = std::mem::take(html);
+    let mut output = String::with_capacity(source.len());
+    let mut search_from = 0usize;
+
+    while let Some(relative_start) = source[search_from..].find(PARAGRAPH_START) {
+        let paragraph_start = search_from + relative_start;
+        let content_start = paragraph_start + PARAGRAPH_START.len();
+        let Some(relative_end) = source[content_start..].find(PARAGRAPH_END) else {
+            break;
+        };
+        let content_end = content_start + relative_end;
+        let paragraph_end = content_end + PARAGRAPH_END.len();
+        let content = &source[content_start..content_end];
+
+        output.push_str(&source[search_from..paragraph_start]);
+        if let Some((prefix_end, heading)) = leading_strong_prefix(content)
+            && is_section_heading(&heading)
+        {
+            let body = content[prefix_end..].trim_start();
+            output.push_str("<h2>");
+            output.push_str(&escape_xml(&heading));
+            output.push_str("</h2>");
+            if !body.is_empty() {
+                output.push_str("\n<p>");
+                output.push_str(body);
+                output.push_str(PARAGRAPH_END);
+            }
+        } else {
+            output.push_str(&source[paragraph_start..paragraph_end]);
+        }
+        search_from = paragraph_end;
+    }
+
+    output.push_str(&source[search_from..]);
+    *html = output;
+}
+
+fn leading_strong_prefix(content: &str) -> Option<(usize, String)> {
+    const STRONG_START: &str = "<strong>";
+    const STRONG_END: &str = "</strong>";
+    const MAX_HEADING_PARTS: usize = 10;
+    const MAX_PART_MARKUP_BYTES: usize = 512;
+    let mut cursor = 0usize;
+    let mut parts = Vec::new();
+
+    loop {
+        if !content[cursor..].starts_with(STRONG_START) {
+            break;
+        }
+        if parts.len() == MAX_HEADING_PARTS {
+            return None;
+        }
+        let value_start = cursor + STRONG_START.len();
+        let value_end = value_start + content[value_start..].find(STRONG_END)?;
+        if value_end - value_start > MAX_PART_MARKUP_BYTES {
+            return None;
+        }
+        let text = strip_markup(&content[value_start..value_end]);
+        if text.is_empty() {
+            return None;
+        }
+        parts.push(text);
+        cursor = value_end + STRONG_END.len();
+        cursor += content[cursor..].len() - content[cursor..].trim_start().len();
+    }
+
+    (!parts.is_empty()).then(|| (cursor, parts.join(" ")))
+}
+
+fn is_section_heading(text: &str) -> bool {
+    const NON_SECTION_LABELS: &[&str] = &[
+        "ALGORITHM",
+        "CAUTION",
+        "DEFINITION",
+        "EQUATION",
+        "EXAMPLE",
+        "FIGURE",
+        "IMPORTANT",
+        "LEMMA",
+        "NOTE",
+        "PROOF",
+        "REMARK",
+        "TABLE",
+        "THEOREM",
+        "WARNING",
+    ];
+    let text = text.trim();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let letter_count = text
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    if text.chars().count() > 120 || !(4..=96).contains(&letter_count) || words.len() > 10 {
+        return false;
+    }
+
+    let first_label = words
+        .iter()
+        .find(|word| word.chars().any(char::is_alphabetic))
+        .map(|word| {
+            word.trim_matches(|character: char| !character.is_alphabetic())
+                .to_uppercase()
+        });
+    if first_label
+        .as_deref()
+        .is_some_and(|label| NON_SECTION_LABELS.contains(&label))
+    {
+        return false;
+    }
+
+    let starts_with_number = words.first().is_some_and(|word| {
+        word.chars().any(|character| character.is_ascii_digit())
+            && word
+                .chars()
+                .all(|character| character.is_ascii_digit() || matches!(character, '.' | '-' | ':'))
+    });
+    let is_uppercase = text.chars().any(char::is_uppercase)
+        && text
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .all(|character| !character.is_lowercase());
+    let is_plausible_unnumbered_heading = is_uppercase && (words.len() > 1 || letter_count >= 7);
+    starts_with_number || is_plausible_unnumbered_heading
 }
 
 fn safe_link_destination(destination: CowStr<'_>) -> CowStr<'_> {

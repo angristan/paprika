@@ -42,6 +42,31 @@ fn treats_pdf_supplied_html_as_text() {
 }
 
 #[test]
+fn separates_run_in_section_headings_from_body_text() {
+    let html = markdown_to_xhtml(
+        "**9** **CONCLUSIONS** When queues are needed, local storage helps.\n\n**ACKNOWLEDGMENTS** We thank the contributors.",
+    );
+    assert!(
+        html.contains(
+            "<h2>9 CONCLUSIONS</h2>\n<p>When queues are needed, local storage helps.</p>"
+        )
+    );
+    assert!(html.contains("<h2>ACKNOWLEDGMENTS</h2>\n<p>We thank the contributors.</p>"));
+}
+
+#[test]
+fn preserves_bold_lead_ins_and_figure_captions_as_paragraphs() {
+    let html = markdown_to_xhtml(
+        "**Important** context remains inline.\n\n**NOTE** Keep this callout inline.\n\n**HTTP** requests remain prose.\n\n**FIGURE** **1:** Sample graph.",
+    );
+    assert!(html.contains("<p><strong>Important</strong> context remains inline.</p>"));
+    assert!(html.contains("<p><strong>NOTE</strong> Keep this callout inline.</p>"));
+    assert!(html.contains("<p><strong>HTTP</strong> requests remain prose.</p>"));
+    assert!(html.contains("<p><strong>FIGURE</strong> <strong>1:</strong> Sample graph.</p>"));
+    assert!(!html.contains("<h2>"));
+}
+
+#[test]
 fn strips_active_link_schemes_from_pdf_text() {
     let html = markdown_to_xhtml("[unsafe](javascript:alert(1)) [safe](https://example.com)");
     assert!(!html.contains("javascript:"));

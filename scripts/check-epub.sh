@@ -187,6 +187,16 @@ assert_paper() {
         echo "QuiCK retains a detached title fragment" >&2
         return 1
       }
+      local closing_chapter
+      closing_chapter="$(archive_member "$epub" OEBPS/text/page-0012.xhtml)"
+      grep -Fq $'<h2>9 CONCLUSIONS</h2>\n<p>When queues are needed' <<<"$closing_chapter" || {
+        echo "QuiCK conclusions remain joined to the first body paragraph" >&2
+        return 1
+      }
+      grep -Fq $'<h2>ACKNOWLEDGMENTS</h2>\n<p>We thank the past' <<<"$closing_chapter" || {
+        echo "QuiCK acknowledgments remain joined to the first body paragraph" >&2
+        return 1
+      }
       ;;
     bert)
       ! grep -Fq '<h3>Language Understanding</h3>' <<<"$chapter" || {
