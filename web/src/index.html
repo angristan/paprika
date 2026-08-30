@@ -18,24 +18,17 @@
         <span class="mark" aria-hidden="true">P</span>
         <span>Paprika</span>
       </a>
-      <p>Files stay on this device</p>
     </header>
 
     <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false">
       <section class="task-intro" aria-labelledby="page-title">
         <h1 id="page-title">Turn a PDF into a book that fits.</h1>
-        <p>
-          Choose a born-digital PDF. Paprika rebuilds its reading flow as a compact EPUB,
-          with a local preview before you download.
-        </p>
+        <p>Local PDF → EPUB. Preview before download.</p>
       </section>
 
       <section class="workbench" aria-labelledby="workbench-title">
         <header class="workbench-header">
-          <div>
-            <h2 id="workbench-title">Conversion workbench</h2>
-            <p id="flow-label">Waiting for a source PDF</p>
-          </div>
+          <h2 id="workbench-title">Convert</h2>
           <ol class="conversion-route" aria-label="Conversion progress">
             <li id="route-source" data-state="current">
               <span>Source</span>
@@ -77,13 +70,11 @@
               <label>
                 Format
                 <select id="format" name="format">
-                  <option value="epub">Reflowable EPUB · recommended</option>
-                  <option value="pdf">Raster PDF · experimental</option>
+                  <option value="epub">EPUB</option>
+                  <option value="pdf">Raster PDF</option>
                 </select>
               </label>
-              <p id="format-note" class="field-note">
-                Selectable text and reader-controlled type size for born-digital PDFs.
-              </p>
+              <p id="format-note" class="field-note" hidden></p>
 
               <div id="epub-options" class="epub-options">
                 <label>
@@ -95,7 +86,7 @@
                     maxlength="300"
                     autocomplete="off"
                     required
-                    placeholder="Derived from the PDF file name"
+                    placeholder="From file name"
                   />
                 </label>
                 <label>
@@ -112,7 +103,6 @@
                     autocomplete="off"
                     autocapitalize="none"
                     spellcheck="false"
-                    aria-describedby="language-help"
                     required
                   />
                 </label>
@@ -127,9 +117,6 @@
                   <option value="ja"></option>
                   <option value="zh-Hans"></option>
                 </datalist>
-                <p id="language-help" class="field-note">
-                  Use a BCP 47 language tag, such as en, fr, or pt-BR.
-                </p>
               </div>
 
               <div id="raster-options" class="raster-options" hidden>
@@ -208,7 +195,7 @@
             <div class="preview-heading">
               <div>
                 <h3 id="preview-title">Preview</h3>
-                <output id="dimensions">Reflowable EPUB · selectable text</output>
+                <output id="dimensions" hidden></output>
               </div>
               <div class="preview-tabs" role="group" aria-label="Document preview">
                 <button id="preview-source" class="preview-tab" type="button" aria-pressed="true" disabled>
@@ -220,9 +207,9 @@
               </div>
             </div>
 
-            <div id="status" class="status" role="status" aria-live="polite">
-              <span class="status-label">Waiting</span>
-              <p>Select a PDF to prepare a local conversion.</p>
+            <div id="status" class="status" role="status" aria-live="polite" data-state="idle">
+              <span class="status-label"></span>
+              <p></p>
               <progress id="progress" hidden></progress>
             </div>
 
@@ -287,20 +274,9 @@
         </div>
       </section>
 
-      <section class="scope" aria-labelledby="scope-title">
-        <h2 id="scope-title">Designed for readable source documents</h2>
-        <p>
-          Paprika preserves selectable text, reading order, headings, lists, tables, links,
-          useful images, and confidently detected equations. Scanned pages still need OCR,
-          which is not included. Raster PDF remains an experimental fallback for visual layouts.
-        </p>
-      </section>
     </main>
 
-    <footer>
-      <span>Documents are never uploaded; normal static-site requests remain visible to your network and Cloudflare.</span>
-      <span>Working URLs and state are released on normal unload; browser and OS memory retention is outside Paprika’s control.</span>
-    </footer>
+    <footer>Document bytes stay local. Cloudflare serves only the app files. No OCR.</footer>
 
     <script type="module" src="/app.js"></script>
   </body>
