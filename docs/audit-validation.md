@@ -78,7 +78,7 @@ The following screenshots were captured from a fresh local `web/dist/` build at 
 
 ![Desktop empty state](screenshots/desktop-empty.png)
 
-The first viewport is a playful 1997-style hypertext utility. A saturated masthead identifies the local tool, classic raised and sunken borders group familiar controls, and a teal proof field shows a fixed PDF becoming a pocket EPUB. The star tile and saturated title bars are intentional period references; there are no fake counters, awards, window buttons, web rings, or dead navigation.
+The first viewport is a restrained 1997-style desktop utility: one gray application window on a solid teal desktop, one navy title bar, familiar beveled controls, and a direct fixed-PDF-to-reflowed-book diagram. Paprika red is reserved for the main action and output edge. There are no patterns, fake counters, awards, window buttons, web rings, or dead navigation.
 
 ### Desktop, completed EPUB
 
@@ -90,7 +90,7 @@ The completed state contracts setup into a narrow source docket with the filenam
 
 ![Mobile result at 320 CSS pixels](screenshots/mobile-result-320px.png)
 
-The utility stacks into one column without horizontal scrolling. The **LOCAL LINK** becomes a short horizontal packet rail between the compact source docket and reader; **Edit** restores the full labeled controls. The result appears before secondary settings, counts remain aligned, and preview navigation, warnings, download, and privacy stay in document order.
+The utility stacks into one column without horizontal scrolling. The **Local** divider becomes a short horizontal arrow between the compact source docket and reader; **Edit** restores the full labeled controls. The result appears before secondary settings, counts remain aligned, and preview navigation, warnings, download, and privacy stay in document order.
 
 ### 200% zoom
 
@@ -104,20 +104,20 @@ The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chrom
 
 The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The redesign:
 
-- replaces generic product polish with a task-specific local utility window and real PDF → EPUB status strip;
-- uses one documented star tile, classic bevel grammar, and saturated title-bar palette instead of gradients, glass, rounded cards, or decorative feature tiles;
-- keeps the large statement inside the setup pane instead of adding a detached marketing hero;
+- replaces generic product polish with one task-specific local utility window and a real PDF → EPUB route;
+- uses a solid teal desktop, one navy title bar, restrained gray chrome, and one Paprika action accent instead of patterns, gradients, glass, rounded cards, or decorative feature tiles;
+- keeps the task statement inside the setup pane instead of adding a detached marketing hero;
 - contracts the completed source into a useful docket and promotes the generated book;
 - preserves narrow-screen gutters, readable preview text, aligned counts, and familiar native controls; and
-- documents every application font, color, radius, type-size role, and intentional nostalgic reference in `DESIGN.md`.
+- documents every application font, color, type-size role, and intentional nostalgic reference in `DESIGN.md`.
 
-The star tile, raised utility chrome, and saturated colors are intentional because the user requested a fun 1990s website. The design avoids nostalgia that would mislead or obstruct: there are no fake metrics, fake window controls, marquees, blinking body copy, cursor effects, or external assets. During real conversion, only packets moving through the **LOCAL LINK** animate. Serif text inside the preview belongs to the generated EPUB, not the application type system.
+The teal desktop, single title bar, square bevels, and native controls carry the 1990s reference without competing with the task. There are no rainbow accents, fake metrics, fake window controls, marquees, blinking body copy, cursor effects, or external assets. During real conversion, only three small packets in the **Local** divider animate. Serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 
 - `README.md` covers CLI behavior, browser limits and lifecycle, preview behavior, Cloudflare deployment, architecture, local development, and each validation command.
 - `docs/privacy.md` distinguishes local document processing from normal static-host request metadata, explains object-URL retention limits, and documents the separate EPUB-sandbox and browser-native PDF trust boundaries.
 - `docs/release.md` defines the locked release gate, required GitHub checks, pinned external inputs, exact Workers Builds settings, production smoke checks, and an approval-gated non-destructive rollback procedure.
-- `DESIGN.md` defines the Paprika ’97 Hypertext Utility direction, evidence requirements, 320-pixel behavior, intentional period references, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
+- `DESIGN.md` defines the quieter Paprika 97 desktop-utility direction, evidence requirements, 320-pixel behavior, intentional period references, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
 
 No production deployment or merge is part of this audit branch.

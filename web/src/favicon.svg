@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Paprika">
   <path fill="#000080" d="M2 2h60v60H2z"/>
-  <path fill="#ffff00" d="M7 7h50v50H7z"/>
+  <path fill="#c0c0c0" d="M6 6h52v52H6z"/>
   <path fill="#cc3300" d="M11 11h42v42H11z"/>
-  <path fill="#fff" d="M18 45V18h13c9 0 14 5 14 13 0 7-5 12-14 12h-5v2zm8-10h5c4 0 6-1 6-4s-2-5-6-5h-5z"/>
-  <path fill="#ffff00" d="M45 18h5v17h-5zm0 21h5v6h-5z"/>
+  <path fill="#fff" d="M19 46V18h13c9 0 14 5 14 13 0 8-5 13-14 13h-5v2zm8-10h5c4 0 6-2 6-5s-2-5-6-5h-5z"/>
 </svg>

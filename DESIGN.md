@@ -12,7 +12,7 @@ Paprika is a local document tool, not a product landing page. The interface help
 - **States:** empty, source ready, processing, output ready, failed, and canceled.
 - **Evidence:** show file identity, output format, progress, limits, warnings, preview state, and download size. Do not invent quality scores, speed claims, visitor counters, or success metrics.
 
-## Creative brief: Paprika ’97 Hypertext Utility
+## Creative brief: Paprika 97
 
 ```text
 Audience · readers turning papers into pocket-sized books
@@ -24,78 +24,73 @@ Objects · source PDF, local conversion job, generated EPUB or raster PDF
 Active scope · one browser tab and one selected file
 Critical states · empty, ready, working, success, error, canceled
 Consequential actions · conversion and download; the source is never changed
-Feel · exuberant, hand-built, dependable
-Avoid · modern SaaS polish, illegible nostalgia, fake browser controls
+Feel · calm, direct, hand-built, dependable
+Avoid · visual noise, modern SaaS polish, illegible nostalgia, fake browser controls
 ```
 
-Paprika should feel like a great shareware utility discovered on the 1997 web: bright, direct, slightly eccentric, and serious about doing one job well. This is not a generic GeoCities costume. The nostalgia must explain the product: a desktop-style local utility sits inside a hypertext page, and visible packets cross a **LOCAL LINK** from fixed PDF to reflowable book.
+Paprika should feel like a dependable desktop utility from 1997, not a collage of 1990s references. One gray application window sits on a solid teal desktop. A single navy title bar establishes identity. Familiar beveled controls and native form elements carry the period character. Paprika red is reserved for the main action and the reflowed edge.
 
 ## Task hierarchy
 
-1. Use the bright site masthead to identify Paprika as a local PDF → EPUB utility.
-2. Keep the three real stages—PDF, local processing, output—in a compact status strip.
-3. Put source selection, limits, output settings, and the primary conversion action in the left utility pane.
+1. Identify Paprika as a local PDF → EPUB utility in the title bar.
+2. Show the three real stages—source, local composition, and result—as one quiet text route.
+3. Put source selection, limits, output settings, and the primary action in the left pane.
 4. Keep advanced raster controls hidden until raster output is selected.
-5. Keep preview, live status, report, warnings, and download together in the right utility pane.
+5. Keep preview, live status, report, warnings, and download together in the right pane.
 6. After conversion, retain source identity and a visible **Edit** action without competing with the result.
-7. Put the concise privacy and OCR statement in the page footer.
-8. At 320 px and 200% zoom, stack route, source, local link, and preview in DOM order without horizontal scrolling.
+7. Put the concise privacy and OCR statement below the window.
+8. At 320 px and 200% zoom, stack route, source, local divider, and preview in DOM order without horizontal scrolling.
 
 ## Visual system
 
 ### Type
 
-- UI and controls: `Verdana, Tahoma, Arial, sans-serif`, regular and bold.
-- Display copy and the wordmark: `Arial Black, Arial, sans-serif`, bold only.
-- Machine values and the local-link label: `Courier New, Courier, monospace`, regular and bold.
-- Generated EPUB content keeps its own document typography inside the sandboxed preview.
-- Diagram-only labels use 8–10 px. Functional UI uses 12, 13, 14, and 15 px. Structural headings use 18, 22, 24, 28, and 30 px. Display copy uses a documented fluid 34–58 px range. No functional text is below 12 px.
+- Application UI: `Tahoma, Verdana, Arial, sans-serif`, regular and bold.
+- Machine values and compact route labels: `Courier New, Courier, monospace`.
+- Generated EPUB content keeps its document typography inside the sandboxed preview.
+- Diagram labels may use 7–10 px. Functional UI uses 11–15 px. The task statement uses a documented fluid 34–48 px range.
 
 ### Color
 
-The palette uses high-contrast, web-safe colors associated with late-1990s personal pages and desktop utilities.
+- `--desktop: #008080` is the only page background.
+- `--window: #c0c0c0`, `--window-light: #ffffff`, `--window-mid: #808080`, and `--window-dark: #000000` define utility chrome and bevels.
+- `--title: #000080` is limited to the title bar, selected state, and trusted structure.
+- `--paprika: #a32900` and `--paprika-dark: #751e00` identify the primary action and reflowed output.
+- `--success: #006600`, `--error: #8b0000`, `--warning: #7a4b00`, `--paper: #ffffff`, and `--ink: #000000` carry semantic meaning.
+- Links use `--link: #0000cc`; secondary text uses `--muted: #404040`.
 
-- `--desktop: #000066` and `--desktop-dot: #66ccff` for the single tiled page background.
-- `--chrome: #c0c0c0`, `--chrome-light: #ffffff`, `--chrome-mid: #808080`, and `--chrome-dark: #000000` for utility surfaces and bevels.
-- `--navy: #000080` and `--blue: #0000cc` for title bars, selected state, and trusted local structure.
-- `--yellow: #ffff00`, `--aqua: #00ffff`, and `--hot-pink: #ff00aa` for identity and playful, non-critical emphasis.
-- `--paprika: #cc3300` and `--paprika-dark: #991f00` for the source document and primary action.
-- `--success: #006600`, `--error: #990000`, `--paper: #ffffff`, and `--ink: #000000` for semantic states and reading surfaces.
-- Supporting utility tokens are `#00cc00` for the local-mode lamp, `#a0a0a0`/`#b0b0b0` for disabled chrome, `#333333` for disabled ink, `#ffffcc` for control hover, `#ff9966` for the raised Paprika edge, and `#008080` for the proof field. Pattern and hard-shadow alpha values are tokens too; they are not one-off component colors.
-
-Color never carries state alone. Every state also has text, position, and border treatment.
+Do not add decorative colors. Color never carries state alone; labels, borders, and position must also communicate it.
 
 ### Shape and depth
 
-- All surfaces are square. Radius is always 0.
+- All surfaces are square.
 - One-pixel and two-pixel light/dark borders create classic raised, sunken, and pressed controls.
-- Do not use soft shadows, glass, glow, blur, rounded cards, or floating panels.
-- The outer workbench is one application window. Inside it, fieldsets and title bars establish ownership; do not wrap every datum in a box.
+- Do not use patterns, gradients, soft shadows, glass, glow, blur, rounded cards, or floating panels.
+- The outer workbench is one application window. Internal rules and fieldsets establish ownership; do not box every datum.
 
 ### Spacing
 
-- Dense form groups use 6–12 px gaps.
-- Major utility regions use 16–24 px gaps.
-- The desktop first viewport must expose the file action and preview diagram without giant marketing whitespace.
+- Dense form groups use 5–12 px gaps.
+- Major regions use 16–20 px gaps.
+- The desktop first viewport must expose the file action and preview without marketing whitespace.
 
 ### Signature
 
-The **LOCAL LINK** is the only animated signature. Four unequal packets visibly move from the fixed-page source toward the reflowable output only while conversion is running. In all other states it remains a legible static connection. Reduced-motion mode removes movement without removing status.
+The narrow **Local** divider is the only transformation cue. It shows a plain arrow at rest and three restrained packets only while conversion is running. Reduced-motion mode removes packet movement without removing status.
 
 ## Deliberate 1990s references
 
-- Native selects, inputs, fieldsets, underlined links, visible focus, beveled controls, saturated title bars, and a single tiled desktop background are intentional.
-- The page may say “Paprika ’97” and “Best viewed with a PDF” because these are identity and task copy, not claims about compatibility.
-- The interface must not add fake visitor counters, fake awards, web rings, “under construction” warnings, marquees, blinking body text, cursor trails, autoplay, fake window buttons, dead navigation, or external image requests.
-- Nostalgia never overrides clear labels, contrast, touch size, error recovery, or the actual conversion flow.
+- The solid teal desktop, navy title bar, gray window chrome, native controls, fieldsets, underlined links, visible focus, and beveled buttons are intentional.
+- The interface must not add patterned backgrounds, multiple competing title bars, rainbow accents, fake visitor counters, awards, web rings, “under construction” warnings, marquees, blinking body text, cursor trails, autoplay, fake window buttons, dead navigation, or external image requests.
+- Nostalgia never overrides hierarchy, contrast, touch size, error recovery, or the conversion flow.
 
 ## Interaction and accessibility
 
-- Keep all controls keyboard operable with a visible 3 px yellow or navy focus outline.
+- Keep all controls keyboard operable with a visible 3 px navy focus outline.
 - Use native controls and semantic landmarks before custom widgets.
 - Keep labels visible; placeholders are not labels.
 - Status changes remain in the polite live region. Errors use text and geometry, never color alone.
-- Primary controls remain at least 44 px high. Supporting text remains at least 12 px.
+- Primary controls remain at least 44 px high. Supporting text remains at least 11 px.
 - Source and generated previews identify the active document and trust boundary.
 - A successful result retains source identity; **Edit** restores every setting without discarding the output.
 - Cancellation keeps the source selected and states what was discarded.

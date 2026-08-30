@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000066" />
+    <meta name="theme-color" content="#008080" />
     <meta
       name="description"
       content="Convert born-digital PDFs to compact, reflowable EPUB books locally in your browser."
@@ -15,19 +15,16 @@
   <body>
     <header class="site-header">
       <a class="wordmark" href="/" aria-label="Paprika home">
-        <span class="mark" aria-hidden="true">P!</span>
-        <span class="wordmark-copy">
-          <strong>PAPRIKA ’97</strong>
-          <small>PDF → EPUB hypertext utility</small>
-        </span>
+        <strong>Paprika 97</strong>
+        <small>PDF → EPUB</small>
       </a>
-      <p class="local-mode"><span aria-hidden="true"></span>100% local mode</p>
+      <p class="local-mode"><span aria-hidden="true"></span>Local only</p>
     </header>
 
     <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false" data-flow="empty">
       <section class="workbench" aria-labelledby="workbench-title">
         <header class="workbench-header">
-          <h2 id="workbench-title">Convert <span aria-hidden="true">/ Reflow-O-Matic</span></h2>
+          <h2 id="workbench-title">PDF to EPUB</h2>
           <ol class="conversion-route" aria-label="Conversion progress">
             <li id="route-source" data-state="current">
               <span>Source</span>
@@ -47,7 +44,6 @@
         <div class="workbench-body">
           <form id="job-form" class="job-panel">
             <section class="task-intro" aria-labelledby="page-title">
-              <p class="edition-stamp">Hypertext edition</p>
               <h1 id="page-title">Break the page.<span>Keep the book.</span></h1>
               <p class="task-promise">PDF in. Reflowable EPUB out. Nothing uploaded.</p>
             </section>
@@ -211,14 +207,13 @@
           </form>
 
           <div class="folio-spine" aria-hidden="true">
-            <span class="spine-label">Local link</span>
+            <span class="spine-label">Local</span>
             <div class="spine-lines">
               <span></span>
               <span></span>
               <span></span>
-              <span></span>
             </div>
-            <span class="folio-arrow">≫</span>
+            <span class="folio-arrow">→</span>
           </div>
 
           <aside class="preview-panel" aria-labelledby="preview-title">
@@ -313,10 +308,7 @@
 
     </main>
 
-    <footer>
-      <span class="footer-fun">★ Best viewed with a PDF ★</span>
-      <span>Document bytes stay local. Cloudflare serves only the app files. No OCR.</span>
-    </footer>
+    <footer>Document bytes stay local. Cloudflare serves only the app files. No OCR.</footer>
 
     <script type="module" src="/app.js"></script>
   </body>
