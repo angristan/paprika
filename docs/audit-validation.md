@@ -1,6 +1,6 @@
 # Reliability and redesign audit
 
-This document records the acceptance evidence for the reliability and interface audit implemented on `feat/reliability-redesign`. Product-code validation was completed at `c77ef254485d0c37d8f1e6fd8cb30af490d1eba6`; this document and its screenshots do not change the deployed application.
+This document records the acceptance evidence for the reliability and interface audit implemented on `feat/reliability-redesign`. The branch remains separate from `main`; this document and its screenshots do not describe a production deployment.
 
 ## Defect-to-test traceability
 
@@ -42,7 +42,7 @@ bun run predeploy
   wrangler deploy --dry-run: passed
 ```
 
-GitHub Actions run [33279349031](https://github.com/angristan/paprika/actions/runs/33279349031) passed the locked build job and native tests on Ubuntu 24.04, macOS 14, and Windows 2022. Its browser step passed all 39 tests across Chromium, Firefox, and WebKit. Each engine ran the axe WCAG A/AA audit, local-only request check, 320 CSS-pixel layout check, 200% zoom check, EPUB conversion/download, warning, cancellation/retry, raster preview, and diagnostic-recovery cases.
+The [feature-branch workflow history](https://github.com/angristan/paprika/actions/workflows/pre-deploy.yml?query=branch%3Afeat%2Freliability-redesign) records the locked build job and native tests on Ubuntu 24.04, macOS 14, and Windows 2022. Its browser step runs 39 tests across Chromium, Firefox, and WebKit. Each engine runs the axe WCAG A/AA audit, local-only request check, 320 CSS-pixel layout check, 200% zoom check, EPUB conversion/download, warning, cancellation/retry, raster preview, and diagnostic-recovery cases.
 
 `main` branch protection requires these four exact checks with strict status checks and administrator enforcement:
 
@@ -56,13 +56,13 @@ GitHub Actions run [33279349031](https://github.com/angristan/paprika/actions/ru
 Two consecutive executions of `scripts/build-web-cloudflare.sh` produced the same aggregate SHA-256 over every file in `web/dist/`:
 
 ```text
-031e8e956fc4e241b702b85aa4aa4d789e0a97e4c530a92b66d570a7c6bcefa1
+d683906d468e4e6d89cd958b38d77875f65e8753ec882334a284e1cfb735d4ce
 ```
 
 The first execution populated the cache. The second finished without Rust compilation and restored verified WASM cache entry:
 
 ```text
-d3b2cfd44c6ef0f106df84c687a01222388de9c701e292535090899bbba6915a
+cfdc49986770288878f31fcceedeb4788ed18cb47edcb27238aa3ef754396f21
 ```
 
 The build scripts verify pinned SHA-256 values before executing or consuming downloaded rustup-init, wasm-pack archive/binary, EPUBCheck archive/JAR, and the QuiCK regression fixture. Cached WASM files have their own `SHA256SUMS`, and the cache key covers the pinned compiler, wasm-pack version, optimization mode, Rust flags, lockfile, manifests, Rust sources, and build script.
@@ -81,7 +81,7 @@ The first viewport has one clear conversion task, a compact source-to-result rou
 
 ![Desktop completed EPUB](screenshots/desktop-result.png)
 
-The result keeps the source controls available, identifies the active preview, shows selectable book content, discloses preview truncation, reports source/text/image counts, presents warnings before download, and gives the download one clear visual priority.
+The completed state condenses source and output controls into one composition bar above the result instead of leaving a long empty side column. It identifies the active preview, bounds prose to a readable measure, discloses preview truncation, reports source/text/image counts, presents one warning summary before download, and gives the download one clear visual priority.
 
 ### Mobile, 320 CSS pixels
 
@@ -96,6 +96,19 @@ The workflow becomes one column without horizontal scrolling. Controls retain vi
 At 200% zoom the same task order remains usable without horizontal document overflow. Controls, preview, report, download, limitations, and privacy stay reachable. Text wraps or truncates only inside explicitly bounded compact route/control labels.
 
 The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chromium, Firefox, or WebKit. The CSS also provides visible `:focus-visible` treatment, at least 44-pixel primary control targets, semantic native controls, live status regions, and a reduced-motion override.
+
+### Impeccable catalogue pass
+
+The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The remediation:
+
+- replaces stacked status/report cards with rules inside one preview region;
+- condenses the completed desktop form above the result, eliminating the empty source column;
+- removes duplicate no-warning copy;
+- limits UI and EPUB prose measure and gives footer text explicit leading;
+- uses a strictly neutral surface scale and 16-pixel narrow-screen gutters; and
+- documents every application font, color, radius, and type-size role in `DESIGN.md`.
+
+Two apparent catalogue matches are intentional and semantic: Paprika red marks only current/selected states, and the empty PDF → EPUB sheet diagram explains the conversion rather than decorating empty space. The serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 

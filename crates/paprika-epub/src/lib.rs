@@ -65,9 +65,12 @@ const FORMULA_HEAVY_MIN_MATH_CHARACTERS: usize = 100;
 const EPUB_CSS: &str = r#"
 :root { color-scheme: light dark; }
 body {
+  box-sizing: border-box;
+  width: 90%;
+  max-width: 72ch;
+  margin: 5% auto;
   font-family: serif;
   line-height: 1.5;
-  margin: 5%;
   orphans: 2;
   widows: 2;
 }

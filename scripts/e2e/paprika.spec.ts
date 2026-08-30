@@ -98,6 +98,12 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
   await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
   await expect(page.locator("#source-page-count")).toHaveText("1");
   await expect(page.locator("#text-page-count")).toHaveText("1");
+  await expect(page.locator("#warning-count")).toHaveText("No warnings");
+  await expect(page.getByText("No conversion warnings.", { exact: true })).toHaveCount(0);
+  const readyColumns = await page.locator(".workbench-body").evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
+  );
+  expect(readyColumns).toBe(1);
   await expect(page.locator("#download")).toBeVisible();
   await expect(page.locator("#preview-output")).toBeEnabled();
 
