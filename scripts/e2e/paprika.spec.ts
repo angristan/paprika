@@ -107,6 +107,13 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
   await expect(page.locator("#download")).toBeVisible();
   await expect(page.locator("#preview-output")).toBeEnabled();
 
+  await page.setViewportSize({ width: 320, height: 844 });
+  await expect(page.locator("#ready-summary")).toBeVisible();
+  await expect(page.locator("#ready-file")).toHaveText("fixture.pdf");
+  await expect(page.locator(".source-fields")).toBeHidden();
+  await page.locator("#edit-settings").click();
+  await expect(page.locator(".source-fields")).toBeVisible();
+
   const downloadPromise = page.waitForEvent("download");
   await page.locator("#download").click();
   const download = await downloadPromise;

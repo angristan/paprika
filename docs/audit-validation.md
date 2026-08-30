@@ -56,7 +56,7 @@ The [feature-branch workflow history](https://github.com/angristan/paprika/actio
 Two consecutive executions of `scripts/build-web-cloudflare.sh` produced the same aggregate SHA-256 over every file in `web/dist/`:
 
 ```text
-d79697435b3fc7fa6a8cd2229250196e35435d6f5009ff4a898143f00a35c423
+6399c0ee6a43cdc0f0c75651f30faee6a13c7d33446f9ca56deacd64d1c2f17f
 ```
 
 The first execution populated the cache. The second finished without Rust compilation and restored verified WASM cache entry:
@@ -75,7 +75,7 @@ The following screenshots were captured from a fresh local `web/dist/` build at 
 
 ![Desktop empty state](screenshots/desktop-empty.png)
 
-The first viewport has one clear conversion task, a compact source-to-result route, adjacent controls and preview, and visible privacy context. The design uses typography, rules, and restrained Paprika red instead of gradients, glass, floating cards, fake metrics, feature tiles, or oversized marketing copy.
+The first viewport has one clear conversion task, a compact source-to-result route, adjacent controls and preview, and concise privacy context. A high-contrast conversion rail, Paprika active state, and cool proofing field add energy without gradients, glass, floating cards, fake metrics, feature tiles, or oversized marketing copy.
 
 ### Desktop, completed EPUB
 
@@ -87,13 +87,13 @@ The completed state condenses source and output controls into one composition ba
 
 ![Mobile result at 320 CSS pixels](screenshots/mobile-result-320px.png)
 
-The workflow becomes one column without horizontal scrolling. Controls retain visible labels and usable target sizes; status, preview navigation, report, warnings, download, limitations, and privacy remain in document order.
+The workflow becomes one column without horizontal scrolling. A compact file/format summary puts the result in the first viewport; **Edit** restores the full labeled controls. Preview navigation, report, warnings, download, and privacy remain in document order.
 
 ### 200% zoom
 
 ![Result at 200 percent zoom](screenshots/zoom-200-percent.png)
 
-At 200% zoom the same task order remains usable without horizontal document overflow. Controls, preview, report, download, limitations, and privacy stay reachable. Text wraps or truncates only inside explicitly bounded compact route/control labels.
+At 200% zoom the same task order remains usable without horizontal document overflow. Controls, preview, report, download, and privacy stay reachable. Text wraps or truncates only inside explicitly bounded compact route/control labels.
 
 The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chromium, Firefox, or WebKit. The CSS also provides visible `:focus-visible` treatment, at least 44-pixel primary control targets, semantic native controls, live status regions, and a reduced-motion override.
 
@@ -105,10 +105,10 @@ The rendered states were re-audited against the complete [Impeccable slop catalo
 - condenses the completed desktop form above the result, eliminating the empty source column;
 - removes duplicate status, helper, limitation, and privacy copy;
 - limits EPUB prose measure and gives the remaining footer text explicit leading;
-- uses a strictly neutral surface scale and 16-pixel narrow-screen gutters; and
+- uses a white canvas, ink conversion rail, Paprika active state, cool proofing surfaces, and 16-pixel narrow-screen gutters; and
 - documents every application font, color, radius, and type-size role in `DESIGN.md`.
 
-Two apparent catalogue matches are intentional and semantic: Paprika red marks only current/selected states, and the empty PDF → EPUB sheet diagram explains the conversion rather than decorating empty space. The serif text inside the preview belongs to the generated EPUB, not the application type system.
+Two apparent catalogue matches are intentional and semantic: Paprika red marks identity, current state, and primary actions, and the empty PDF → EPUB sheet diagram explains the conversion rather than decorating empty space. The serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 
