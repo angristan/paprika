@@ -16,6 +16,8 @@ test("serves the task-first local conversion workbench", async ({ page }) => {
   await expect(page).toHaveTitle(/Paprika/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("PDF");
   await expect(page.getByRole("region", { name: "Convert" })).toBeVisible();
+  await expect(page.locator(".folio-spine")).toBeVisible();
+  await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "empty");
   await expect(page.getByRole("button", { name: "Make EPUB" })).toBeDisabled();
   await expect(page.locator("#route-source")).toHaveAttribute("aria-current", "step");
   await expect(page.getByText(/Document bytes stay local/)).toBeVisible();
@@ -44,6 +46,8 @@ test("uses the documented local PDF preview boundary", async ({ page }) => {
   });
   await expect(page.locator("#preview-frame")).not.toHaveAttribute("sandbox", /.+/);
   await expect(page.locator("#preview-open")).toHaveAttribute("rel", /noopener/);
+  await expect(page.locator("#preview-boundary")).toBeVisible();
+  await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "source");
   await expect(page.getByRole("button", { name: "Make EPUB" })).toBeEnabled();
 });
 
@@ -55,6 +59,8 @@ test("rejects a non-PDF before conversion", async ({ page }) => {
   });
   await expect(page.getByText("Wrong file", { exact: true })).toBeVisible();
   await expect(page.getByText("Paprika currently accepts PDF documents only.")).toBeVisible();
+  await expect(page.locator("#route-source")).toHaveAttribute("data-state", "error");
+  await expect(page.locator("#route-compose")).toHaveAttribute("data-state", "pending");
 });
 
 test("ships restrictive headers and both licenses", async ({ request }) => {

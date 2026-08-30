@@ -56,7 +56,7 @@ The [feature-branch workflow history](https://github.com/angristan/paprika/actio
 Two consecutive executions of `scripts/build-web-cloudflare.sh` produced the same aggregate SHA-256 over every file in `web/dist/`:
 
 ```text
-6399c0ee6a43cdc0f0c75651f30faee6a13c7d33446f9ca56deacd64d1c2f17f
+8af9130303ccd943652ffc406ebbe4874cbdfd1b2dbe04e5e0cb364edbce3b36
 ```
 
 The first execution populated the cache. The second finished without Rust compilation and restored verified WASM cache entry:
@@ -75,25 +75,25 @@ The following screenshots were captured from a fresh local `web/dist/` build at 
 
 ![Desktop empty state](screenshots/desktop-empty.png)
 
-The first viewport has one clear conversion task, a compact source-to-result route, adjacent controls and preview, and concise privacy context. A high-contrast conversion rail, Paprika active state, and cool proofing field add energy without gradients, glass, floating cards, fake metrics, feature tiles, or oversized marketing copy.
+The first viewport is one open folio: source controls form the rigid left leaf, a Paprika seam carries the transformation, and the cool proofing field forms the flexible reader leaf. The route acts as a running head instead of a separate navigation bar. There are no gradients, glass panels, floating cards, fake metrics, or feature tiles.
 
 ### Desktop, completed EPUB
 
 ![Desktop completed EPUB](screenshots/desktop-result.png)
 
-The completed state condenses source and output controls into one composition bar above the result instead of leaving a long empty side column. It identifies the active preview, bounds prose to a readable measure, discloses preview truncation, reports source/text/image counts, presents one warning summary before download, and gives the download one clear visual priority.
+The completed state contracts the source leaf into a narrow editable file cover while the reader proof expands. It identifies the active preview, bounds prose to a readable measure, distinguishes the capped preview from complete-download totals, reports source/text/image counts, presents one warning summary before download, and gives the download one clear visual priority.
 
 ### Mobile, 320 CSS pixels
 
 ![Mobile result at 320 CSS pixels](screenshots/mobile-result-320px.png)
 
-The workflow becomes one column without horizontal scrolling. A compact file/format summary puts the result in the first viewport; **Edit** restores the full labeled controls. Preview navigation, report, warnings, download, and privacy remain in document order.
+The folio closes into one column without horizontal scrolling. Its reflow seam turns downward between the compact file/format summary and reader proof; **Edit** restores the full labeled controls. Counts become full-width rows instead of compressed cards, and preview navigation, warnings, download, and privacy remain in document order.
 
 ### 200% zoom
 
 ![Result at 200 percent zoom](screenshots/zoom-200-percent.png)
 
-At 200% zoom the same task order remains usable without horizontal document overflow. Controls, preview, report, download, and privacy stay reachable. Text wraps or truncates only inside explicitly bounded compact route/control labels.
+At 200% zoom the same task order remains usable without horizontal document overflow. Controls, preview, report, download, and privacy stay reachable. Compact route labels remain complete, and longer text wraps without horizontal overflow.
 
 The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chromium, Firefox, or WebKit. The CSS also provides visible `:focus-visible` treatment, at least 44-pixel primary control targets, semantic native controls, live status regions, and a reduced-motion override.
 
@@ -101,20 +101,20 @@ The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chrom
 
 The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The remediation:
 
-- replaces stacked status/report cards with rules inside one preview region;
-- condenses the completed desktop form above the result, eliminating the empty source column;
+- uses one folio boundary instead of separate cards for route, settings, and proof;
+- turns the route into an unboxed running head and contracts the completed source leaf;
+- uses the central reflow seam as the only high-color structural element;
 - removes duplicate status, helper, limitation, and privacy copy;
-- limits EPUB prose measure and gives the remaining footer text explicit leading;
-- uses a white canvas, ink conversion rail, Paprika active state, cool proofing surfaces, and 16-pixel narrow-screen gutters; and
-- documents every application font, color, radius, and type-size role in `DESIGN.md`.
+- limits EPUB prose measure, preserves 16-pixel narrow-screen gutters, and turns mobile counts into aligned rows; and
+- documents every application font, color, radius, type-size role, and intentional exception in `DESIGN.md`.
 
-Two apparent catalogue matches are intentional and semantic: Paprika red marks identity, current state, and primary actions, and the empty PDF → EPUB sheet diagram explains the conversion rather than decorating empty space. The serif text inside the preview belongs to the generated EPUB, not the application type system.
+The central Paprika seam and empty PDF → EPUB sheet transformation are intentional functional diagrams: they show fixed page lines being reflowed into a reader page and animate only during active conversion. The serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 
 - `README.md` covers CLI behavior, browser limits and lifecycle, preview behavior, Cloudflare deployment, architecture, local development, and each validation command.
 - `docs/privacy.md` distinguishes local document processing from normal static-host request metadata, explains object-URL retention limits, and documents the separate EPUB-sandbox and browser-native PDF trust boundaries.
 - `docs/release.md` defines the locked release gate, required GitHub checks, pinned external inputs, exact Workers Builds settings, production smoke checks, and an approval-gated non-destructive rollback procedure.
-- `DESIGN.md` defines the task-first print-workshop direction, evidence requirements, 320-pixel behavior, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
+- `DESIGN.md` defines the reflowing-folio direction, evidence requirements, 320-pixel behavior, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
 
 No production deployment or merge is part of this audit branch.

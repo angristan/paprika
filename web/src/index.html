@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#ededed" />
     <meta
       name="description"
       content="Convert born-digital PDFs to compact, reflowable EPUB books locally in your browser."
@@ -20,7 +20,7 @@
       </a>
     </header>
 
-    <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false">
+    <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false" data-flow="empty">
       <section class="task-intro" aria-labelledby="page-title">
         <h1 id="page-title">Turn a PDF into <span>a book that fits.</span></h1>
         <p>Local PDF → EPUB. Preview before download.</p>
@@ -48,7 +48,15 @@
         <div class="workbench-body">
           <form id="job-form" class="job-panel">
             <div id="ready-summary" class="ready-summary" hidden>
-              <span><strong id="ready-file"></strong> · <span id="ready-format"></span></span>
+              <div class="ready-document">
+                <span class="ready-label">Source</span>
+                <div class="ready-flow-summary">
+                  <strong id="ready-file"></strong>
+                  <span class="ready-arrow" aria-hidden="true">→</span>
+                  <span class="visually-hidden">Output</span>
+                  <span id="ready-format"></span>
+                </div>
+              </div>
               <button id="edit-settings" class="secondary-button" type="button">Edit</button>
             </div>
 
@@ -196,6 +204,16 @@
             </div>
           </form>
 
+          <div class="folio-spine" aria-hidden="true">
+            <div class="spine-lines">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <span class="folio-arrow">→</span>
+          </div>
+
           <aside class="preview-panel" aria-labelledby="preview-title">
             <div class="preview-heading">
               <div>
@@ -228,11 +246,18 @@
               </div>
             </details>
 
-            <div id="preview-stage" class="preview-stage">
+            <div id="preview-stage" class="preview-stage" data-preview="empty">
+              <p id="preview-boundary" class="preview-boundary" hidden>Browser PDF viewer</p>
               <div id="sheet" class="sheet-placeholder" aria-hidden="true">
-                <div class="source-page"><span></span><span></span><span></span><span></span></div>
-                <div class="flow-arrow"></div>
-                <div class="reader-page"><span></span><span></span><span></span><span></span><span></span></div>
+                <div class="source-page">
+                  <span></span><span></span><span></span><span></span><span></span><span></span>
+                </div>
+                <div class="flow-arrow">
+                  <span></span><span></span><span></span><span></span>
+                </div>
+                <div class="reader-page">
+                  <span></span><span></span><span></span><span></span><span></span><span></span>
+                </div>
               </div>
               <iframe
                 id="preview-frame"

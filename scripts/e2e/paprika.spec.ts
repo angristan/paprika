@@ -103,9 +103,15 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
   const readyColumns = await page.locator(".workbench-body").evaluate((element) =>
     getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length,
   );
-  expect(readyColumns).toBe(1);
+  expect(readyColumns).toBe(3);
   await expect(page.locator("#download")).toBeVisible();
   await expect(page.locator("#preview-output")).toBeEnabled();
+  await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "output");
+  await expect(page.locator("#preview-boundary")).toBeHidden();
+  await expect(page.locator("#preview-position")).toContainText("scroll to read");
+  await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "success");
+  await expect(page.locator("#ready-summary")).toBeVisible();
+  await expect(page.locator(".source-fields")).toBeHidden();
 
   await page.setViewportSize({ width: 320, height: 844 });
   await expect(page.locator("#ready-summary")).toBeVisible();
@@ -124,12 +130,17 @@ test("cancels a job and converts again with a fresh worker", async ({ page }) =>
   await selectPdf(page, Array.from({ length: 80 }, (_, index) => `Synthetic page ${index + 1}`));
   await page.locator("#convert").click();
   await expect(page.locator("#cancel")).toBeVisible();
+  await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "working");
   await page.locator("#cancel").click();
   await expect(page.locator(".status-label")).toHaveText("Canceled");
+  await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "ready");
   await expect(page.locator("#convert")).toBeEnabled();
 
   await page.locator("#convert").click();
   await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
+  await expect(page.locator("#source-page-count")).toHaveText("80");
+  await expect(page.locator("#preview-limit")).toContainText("Preview capped at 12 pages");
+  await expect(page.locator("#preview-limit")).toContainText("complete download");
 });
 
 test("surfaces conversion warnings before download", async ({ page }) => {
@@ -149,6 +160,8 @@ test("renders raster PDF output and exposes a local preview", async ({ page }) =
   await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
   await expect(page.locator("#download")).toHaveAttribute("download", "fixture.paprika.pdf");
   await expect(page.locator("#preview-open")).toHaveAttribute("href", /^blob:/);
+  await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "pdf");
+  await expect(page.locator("#preview-boundary")).toBeVisible();
 });
 
 test("shows safe diagnostics and recovers from invalid input", async ({ page }) => {
@@ -159,6 +172,7 @@ test("shows safe diagnostics and recovers from invalid input", async ({ page }) 
   });
   await page.locator("#convert").click();
   await expect(page.locator(".status-label")).toHaveText("Could not convert", { timeout: 30_000 });
+  await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "error");
   await expect(page.locator("#diagnostic-text")).toContainText("Document names and contents: omitted");
   await expect(page.locator("#diagnostic-text")).not.toContainText("broken.pdf");
 

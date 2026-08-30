@@ -38,6 +38,8 @@ const width = document.querySelector("#width");
 const height = document.querySelector("#height");
 const dpi = document.querySelector("#dpi");
 const sheet = document.querySelector("#sheet");
+const previewStage = document.querySelector("#preview-stage");
+const previewBoundary = document.querySelector("#preview-boundary");
 const dimensions = document.querySelector("#dimensions");
 const previewFrame = document.querySelector("#preview-frame");
 const previewSource = document.querySelector("#preview-source");
@@ -206,14 +208,16 @@ function setStatus(label, message, state = "idle") {
 }
 
 function setFlow(state) {
+  appShell.dataset.flow = state;
   const routeStates = {
     empty: ["current", "pending", "pending"],
+    "source-error": ["error", "pending", "pending"],
     ready: ["done", "current", "pending"],
     working: ["done", "current", "pending"],
     success: ["done", "done", "done"],
     error: ["done", "error", "pending"],
   }[state] ?? ["current", "pending", "pending"];
-  const currentStep = state === "success" ? 2 : state === "empty" ? 0 : 1;
+  const currentStep = state === "success" ? 2 : ["empty", "source-error"].includes(state) ? 0 : 1;
   [routeSource, routeCompose, routeResult].forEach((step, index) => {
     step.dataset.state = routeStates[index];
     if (index === currentStep) {
@@ -223,7 +227,7 @@ function setFlow(state) {
     }
   });
 
-  routeSource.querySelector("span").textContent = state === "empty" ? "Source" : "Selected";
+  routeSource.querySelector("span").textContent = ["empty", "source-error"].includes(state) ? "Source" : "Selected";
   routeCompose.querySelector("span").textContent = state === "working"
     ? "Working"
     : state === "success"
@@ -277,18 +281,18 @@ function setFile(file) {
     return;
   }
   if (file.size === 0) {
-    setFlow("error");
+    setFlow("source-error");
     setStatus("Empty file", "Choose a PDF that contains document data.", "error");
     return;
   }
   if (file.size > MAX_BYTES) {
-    setFlow("error");
+    setFlow("source-error");
     setStatus("Too large", "Use the CLI for PDFs larger than 64 MiB.", "error");
     return;
   }
   const looksLikePdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
   if (!looksLikePdf) {
-    setFlow("error");
+    setFlow("source-error");
     setStatus("Wrong file", "Paprika currently accepts PDF documents only.", "error");
     return;
   }
@@ -340,6 +344,8 @@ function clearDownload() {
 }
 
 function showEmptyPreview() {
+  previewStage.dataset.preview = "empty";
+  previewBoundary.hidden = true;
   blankPreviewFrame();
   epubPreview.releasePageUrls();
   sheet.hidden = false;
@@ -365,6 +371,8 @@ function showPdfPreview(url, title) {
 
 function showSourcePreview() {
   if (!sourceUrl) return;
+  previewStage.dataset.preview = "source";
+  previewBoundary.hidden = false;
   epubPreview.releasePageUrls();
   showPdfPreview(
     sourceUrl,
@@ -382,6 +390,8 @@ function showSourcePreview() {
 
 function showOutputPreview(index = epubPreview.chapterIndex) {
   if (!outputUrl || !outputFormat) return;
+  previewStage.dataset.preview = outputFormat === "pdf" ? "pdf" : "output";
+  previewBoundary.hidden = outputFormat !== "pdf";
   sheet.hidden = true;
   previewFrame.hidden = false;
   previewOpen.href = outputUrl;
@@ -405,10 +415,10 @@ function showOutputPreview(index = epubPreview.chapterIndex) {
   previewControls.hidden = epubPreview.pageCount <= 1;
   previewPrevious.disabled = epubPreview.chapterIndex === 0;
   previewNext.disabled = epubPreview.chapterIndex + 1 >= epubPreview.pageCount;
-  previewPosition.textContent = `Preview ${epubPreview.chapterIndex + 1} of ${epubPreview.pageCount} · source page ${chapter.source_page}`;
+  previewPosition.textContent = `Page ${epubPreview.chapterIndex + 1} of ${epubPreview.pageCount} · source ${chapter.source_page} · scroll to read`;
   previewLimit.hidden = !epubPreview.truncated;
   previewLimit.textContent = epubPreview.truncated
-    ? `Showing ${epubPreview.pageCount} pages. Download is complete.`
+    ? `Preview capped at ${epubPreview.pageCount} pages. Totals below cover the complete download.`
     : "";
 }
 
