@@ -56,7 +56,7 @@ The [feature-branch workflow history](https://github.com/angristan/paprika/actio
 Two consecutive executions of `scripts/build-web-cloudflare.sh` produced the same aggregate SHA-256 over every file in `web/dist/`:
 
 ```text
-d683906d468e4e6d89cd958b38d77875f65e8753ec882334a284e1cfb735d4ce
+d79697435b3fc7fa6a8cd2229250196e35435d6f5009ff4a898143f00a35c423
 ```
 
 The first execution populated the cache. The second finished without Rust compilation and restored verified WASM cache entry:
@@ -103,8 +103,8 @@ The rendered states were re-audited against the complete [Impeccable slop catalo
 
 - replaces stacked status/report cards with rules inside one preview region;
 - condenses the completed desktop form above the result, eliminating the empty source column;
-- removes duplicate no-warning copy;
-- limits UI and EPUB prose measure and gives footer text explicit leading;
+- removes duplicate status, helper, limitation, and privacy copy;
+- limits EPUB prose measure and gives the remaining footer text explicit leading;
 - uses a strictly neutral surface scale and 16-pixel narrow-screen gutters; and
 - documents every application font, color, radius, and type-size role in `DESIGN.md`.
 

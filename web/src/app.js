@@ -54,7 +54,6 @@ const diagnostics = document.querySelector("#diagnostics");
 const diagnosticText = document.querySelector("#diagnostic-text");
 const copyDiagnosticButton = document.querySelector("#copy-diagnostic");
 const copyStatus = document.querySelector("#copy-status");
-const flowLabel = document.querySelector("#flow-label");
 const routeSource = document.querySelector("#route-source");
 const routeCompose = document.querySelector("#route-compose");
 const routeResult = document.querySelector("#route-result");
@@ -220,14 +219,6 @@ function setFlow(state) {
     }
   });
 
-  const labels = {
-    empty: "Waiting for a source PDF",
-    ready: "Source ready · conversion stays in this tab",
-    working: "Composing the result locally",
-    success: "Result ready to review and download",
-    error: "Conversion stopped · source remains selected",
-  };
-  flowLabel.textContent = labels[state] ?? labels.empty;
   routeSource.querySelector("span").textContent = state === "empty" ? "Source" : "Selected";
   routeCompose.querySelector("span").textContent = state === "working"
     ? "Working"
@@ -276,7 +267,7 @@ function setFile(file) {
   fileInput.value = "";
   if (!file) {
     setFlow("empty");
-    setStatus("Waiting", "Select a PDF to prepare a local conversion.");
+    setStatus("", "", "idle");
     return;
   }
   if (file.size === 0) {
@@ -311,7 +302,7 @@ function setFile(file) {
   appShell.dataset.hasFile = "true";
   showSourcePreview();
   setFlow("ready");
-  setStatus("Ready", "Review the source or start the local conversion.", "ready");
+  setStatus("", "", "idle");
 }
 
 function clearConversionReport() {
@@ -409,7 +400,7 @@ function showOutputPreview(index = epubPreview.chapterIndex) {
   previewPosition.textContent = `Preview ${epubPreview.chapterIndex + 1} of ${epubPreview.pageCount} · source page ${chapter.source_page}`;
   previewLimit.hidden = !epubPreview.truncated;
   previewLimit.textContent = epubPreview.truncated
-    ? `Preview limited to ${epubPreview.pageCount} source pages. The download contains the complete EPUB.`
+    ? `Showing ${epubPreview.pageCount} pages. Download is complete.`
     : "";
 }
 
@@ -468,12 +459,12 @@ function updateOutputUI() {
   convertButton.textContent = isEpub ? "Make EPUB" : "Make raster PDF";
   previewOutput.textContent = isEpub ? "Result EPUB" : "Result PDF";
   routeResultFormat.textContent = isEpub ? "EPUB" : "PDF";
-  formatNote.textContent = isEpub
-    ? "Selectable text and reader-controlled type size for born-digital PDFs."
-    : "Experimental fallback. Pages become images, so output is larger and text is not selectable.";
+  formatNote.hidden = isEpub;
+  formatNote.textContent = isEpub ? "" : "Experimental · image-only output.";
 
+  dimensions.hidden = isEpub;
   if (isEpub) {
-    dimensions.textContent = "Reflowable EPUB · selectable text";
+    dimensions.textContent = "";
   } else {
     const output = rasterConversionOptions();
     dimensions.textContent = `${output.width} × ${output.height} px · ${output.dpi} dpi`;
@@ -484,7 +475,7 @@ function invalidateCompletedOutput() {
   if (!outputUrl || activeJob) return;
   clearDownload();
   setFlow(selectedFile ? "ready" : "empty");
-  setStatus("Ready", "Output settings changed. Start a new local conversion.", "ready");
+  setStatus("", "", "idle");
 }
 
 previewSource.addEventListener("click", showSourcePreview);
@@ -497,7 +488,7 @@ format.addEventListener("change", () => {
   clearDiagnostics();
   updateOutputUI();
   setFlow(selectedFile ? "ready" : "empty");
-  if (selectedFile) setStatus("Ready", "Output format changed. Start a local conversion.", "ready");
+  if (selectedFile) setStatus("", "", "idle");
 });
 
 preset.addEventListener("change", () => {
@@ -572,7 +563,7 @@ form.addEventListener("submit", async (event) => {
   cancelButton.hidden = false;
   progress.hidden = false;
   setFlow("working");
-  setStatus("Starting", "Preparing the local conversion engine…", "working");
+  setStatus("Starting", "Loading…", "working");
 
   const job = activeJob;
   try {
@@ -614,7 +605,7 @@ cancelButton.addEventListener("click", () => {
   updateOutputUI();
   convertButton.disabled = !selectedFile;
   setFlow(selectedFile ? "ready" : "empty");
-  setStatus("Canceled", "The source is still selected. No output was saved.", "ready");
+  setStatus("Canceled", "No output saved.", "ready");
 });
 
 function handleWorkerMessage(event) {
@@ -639,15 +630,13 @@ function handleWorkerMessage(event) {
   ) return;
 
   if (message.type === "booting") {
-    setStatus("Starting", "Loading the local WebAssembly engine…", "working");
+    setStatus("Starting", "Loading…", "working");
     return;
   }
   if (message.type === "composing") {
     setStatus(
       message.format === "pdf" ? "Rendering" : "Composing",
-      message.format === "pdf"
-        ? "Rendering and fitting source pages locally…"
-        : "Extracting text and rebuilding reading order locally…",
+      message.format === "pdf" ? "Rendering pages…" : "Rebuilding reading order…",
       "working",
     );
     return;
@@ -655,7 +644,7 @@ function handleWorkerMessage(event) {
   if (message.type === "inspected") {
     setStatus(
       "Rendering",
-      `${message.pages} source page${message.pages === 1 ? "" : "s"} · rendering locally…`,
+      `${message.pages} page${message.pages === 1 ? "" : "s"}…`,
       "working",
     );
     return;
@@ -717,7 +706,7 @@ function completeJob(message) {
         previewOutput.disabled = true;
         showSourcePreview();
         previewLimit.hidden = false;
-        previewLimit.textContent = "The EPUB is ready, but this document exceeded the bounded browser preview.";
+        previewLimit.textContent = "Preview unavailable. Download is ready.";
       }
     } else {
       showOutputPreview(0);
@@ -727,7 +716,7 @@ function completeJob(message) {
     previewOutput.disabled = true;
     showSourcePreview();
     previewLimit.hidden = false;
-    previewLimit.textContent = "The output is ready, but its embedded preview could not be shown safely.";
+    previewLimit.textContent = "Preview unavailable. Download is ready.";
   }
 
   renderConversionReport({
@@ -737,16 +726,9 @@ function completeJob(message) {
     images: message.imageCount,
     warnings: message.warnings,
   });
-  const pageSummary = Number.isSafeInteger(message.pages)
-    ? `${message.pages} source page${message.pages === 1 ? "" : "s"}. `
-    : "";
   appShell.dataset.hasOutput = "true";
   setFlow("success");
-  setStatus(
-    "Ready",
-    `${pageSummary}Review the report, then download the local result.`,
-    "success",
-  );
+  setStatus("Ready", "", "success");
   finishJob();
   scheduleWorkerRecycle(completedJob?.file.size ?? 0);
 }

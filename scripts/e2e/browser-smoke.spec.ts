@@ -15,10 +15,10 @@ test.beforeEach(async ({ page }) => {
 test("serves the task-first local conversion workbench", async ({ page }) => {
   await expect(page).toHaveTitle(/Paprika/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("PDF");
-  await expect(page.getByRole("region", { name: "Conversion workbench" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Convert" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Make EPUB" })).toBeDisabled();
   await expect(page.locator("#route-source")).toHaveAttribute("aria-current", "step");
-  await expect(page.getByText("Files stay on this device")).toBeVisible();
+  await expect(page.getByText(/Document bytes stay local/)).toBeVisible();
   await expect(page.locator("#preview-frame")).toHaveAttribute("sandbox", "allow-same-origin");
 });
 
@@ -33,7 +33,7 @@ test("switches to the explicit raster fallback", async ({ page }) => {
   await page.getByLabel("Format").selectOption("pdf");
   await expect(page.getByRole("button", { name: "Make raster PDF" })).toBeDisabled();
   await expect(page.getByLabel("Raster layout")).toBeVisible();
-  await expect(page.getByText("Experimental fallback.")).toBeVisible();
+  await expect(page.getByText("Experimental · image-only output.")).toBeVisible();
 });
 
 test("uses the documented local PDF preview boundary", async ({ page }) => {
