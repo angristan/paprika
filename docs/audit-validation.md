@@ -1,6 +1,6 @@
 # Reliability and redesign audit
 
-This document records the acceptance evidence for the reliability and interface audit implemented on `feat/reliability-redesign`. The branch remains separate from `main`; this document and its screenshots do not describe a production deployment.
+This document records the acceptance evidence for Paprika’s reliability work and the interface review on `feat/90s-redesign`. The branch remains separate from `main`; this document and its screenshots do not describe a production deployment.
 
 ## Defect-to-test traceability
 
@@ -45,7 +45,7 @@ bun run predeploy
   wrangler deploy --dry-run: passed
 ```
 
-The [feature-branch workflow history](https://github.com/angristan/paprika/actions/workflows/pre-deploy.yml?query=branch%3Afeat%2Freliability-redesign) records the locked build job and native tests on Ubuntu 24.04, macOS 14, and Windows 2022. Its browser step runs 42 tests across Chromium, Firefox, and WebKit. Each engine runs the axe WCAG A/AA audit, local-only request check, 320 CSS-pixel layout check, 200% zoom check, synthetic EPUB conversion/download, the pinned real QuiCK title regression, warning, cancellation/retry, raster preview, and diagnostic-recovery cases.
+The [feature-branch workflow history](https://github.com/angristan/paprika/actions/workflows/pre-deploy.yml?query=branch%3Afeat%2F90s-redesign) records the locked build job and native tests on Ubuntu 24.04, macOS 14, and Windows 2022. Its browser step runs 42 tests across Chromium, Firefox, and WebKit. Each engine runs the axe WCAG A/AA audit, local-only request check, 320 CSS-pixel layout check, 200% zoom check, synthetic EPUB conversion/download, the pinned real QuiCK title regression, warning, cancellation/retry, raster preview, and diagnostic-recovery cases.
 
 `main` branch protection requires these four exact checks with strict status checks and administrator enforcement:
 
@@ -78,19 +78,19 @@ The following screenshots were captured from a fresh local `web/dist/` build at 
 
 ![Desktop empty state](screenshots/desktop-empty.png)
 
-The first viewport is a high-contrast proof press: a solid Paprika source slab holds the task and controls, a black reflow gate carries the transformation, and a cool proofing field shows a fixed PDF page opening into a reflowable book. The route is integrated into the press header. There are no gradients, glass panels, floating cards, fake metrics, or feature tiles.
+The first viewport is a playful 1997-style hypertext utility. A saturated masthead identifies the local tool, classic raised and sunken borders group familiar controls, and a teal proof field shows a fixed PDF becoming a pocket EPUB. The star tile and saturated title bars are intentional period references; there are no fake counters, awards, window buttons, web rings, or dead navigation.
 
 ### Desktop, completed EPUB
 
 ![Desktop completed EPUB](screenshots/desktop-result.png)
 
-The completed state contracts the source slab into a narrow docket with the filename, output format, source-page count, and **Edit** action while the reader proof expands. It identifies the active preview, bounds prose to a readable measure, distinguishes the capped preview from complete-download totals, reports source/text/image counts, presents one warning summary before download, and gives the download one clear visual priority.
+The completed state contracts setup into a narrow source docket with the filename, output format, source-page count, and **Edit** action while the generated reader expands. It identifies the active preview, bounds prose to a readable measure, distinguishes the capped preview from complete-download totals, reports source/text/image counts, and gives the download one clear visual priority.
 
 ### Mobile, 320 CSS pixels
 
 ![Mobile result at 320 CSS pixels](screenshots/mobile-result-320px.png)
 
-The press stacks into one column without horizontal scrolling. Its reflow gate turns downward between the compact source docket and reader proof; **Edit** restores the full labeled controls. Counts become full-width rows instead of compressed cards, and preview navigation, warnings, download, and privacy remain in document order.
+The utility stacks into one column without horizontal scrolling. The **LOCAL LINK** becomes a short horizontal packet rail between the compact source docket and reader; **Edit** restores the full labeled controls. The result appears before secondary settings, counts remain aligned, and preview navigation, warnings, download, and privacy stay in document order.
 
 ### 200% zoom
 
@@ -102,22 +102,22 @@ The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chrom
 
 ### Impeccable catalogue pass
 
-The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The remediation:
+The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The redesign:
 
-- replaces low-contrast neutral acreage with three semantic planes: Paprika source, black reflow gate, and cool proof;
-- integrates the task statement into the active source slab instead of adding a detached marketing hero;
-- turns the route into the press header and contracts the completed source into a useful docket;
-- removes duplicate status, helper, limitation, and privacy copy;
-- limits EPUB prose measure, preserves narrow-screen gutters, and turns mobile counts into aligned rows; and
-- documents every application font, color, radius, type-size role, and intentional exception in `DESIGN.md`.
+- replaces generic product polish with a task-specific local utility window and real PDF → EPUB status strip;
+- uses one documented star tile, classic bevel grammar, and saturated title-bar palette instead of gradients, glass, rounded cards, or decorative feature tiles;
+- keeps the large statement inside the setup pane instead of adding a detached marketing hero;
+- contracts the completed source into a useful docket and promotes the generated book;
+- preserves narrow-screen gutters, readable preview text, aligned counts, and familiar native controls; and
+- documents every application font, color, radius, type-size role, and intentional nostalgic reference in `DESIGN.md`.
 
-The Paprika source slab, black reflow gate, and fixed-page-to-open-book diagram intentionally encode the operation. During real conversion, only line fragments moving through the gate animate. The serif text inside the preview belongs to the generated EPUB, not the application type system.
+The star tile, raised utility chrome, and saturated colors are intentional because the user requested a fun 1990s website. The design avoids nostalgia that would mislead or obstruct: there are no fake metrics, fake window controls, marquees, blinking body copy, cursor effects, or external assets. During real conversion, only packets moving through the **LOCAL LINK** animate. Serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 
 - `README.md` covers CLI behavior, browser limits and lifecycle, preview behavior, Cloudflare deployment, architecture, local development, and each validation command.
 - `docs/privacy.md` distinguishes local document processing from normal static-host request metadata, explains object-URL retention limits, and documents the separate EPUB-sandbox and browser-native PDF trust boundaries.
 - `docs/release.md` defines the locked release gate, required GitHub checks, pinned external inputs, exact Workers Builds settings, production smoke checks, and an approval-gated non-destructive rollback procedure.
-- `DESIGN.md` defines the Paprika Proof Press direction, evidence requirements, 320-pixel behavior, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
+- `DESIGN.md` defines the Paprika ’97 Hypertext Utility direction, evidence requirements, 320-pixel behavior, intentional period references, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
 
 No production deployment or merge is part of this audit branch.

@@ -14,10 +14,13 @@ test.beforeEach(async ({ page }) => {
 
 test("serves the task-first local conversion workbench", async ({ page }) => {
   await expect(page).toHaveTitle(/Paprika/);
+  await expect(page.locator(".wordmark")).toContainText("PAPRIKA ’97");
+  await expect(page.locator(".local-mode")).toHaveText(/100% local mode/i);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Keep the book");
+  await expect(page.locator(".edition-stamp")).toHaveText("Hypertext edition");
   await expect(page.locator(".task-promise")).toContainText("PDF in. Reflowable EPUB out.");
   await expect(page.getByRole("region", { name: "Convert" })).toBeVisible();
-  await expect(page.locator(".folio-spine")).toBeVisible();
+  await expect(page.locator(".folio-spine")).toContainText("Local link");
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "empty");
   await expect(page.getByRole("button", { name: "Make EPUB" })).toBeDisabled();
   await expect(page.locator("#route-source")).toHaveAttribute("aria-current", "step");
