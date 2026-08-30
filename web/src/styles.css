@@ -1,9 +1,11 @@
 :root {
   color-scheme: light;
-  --paper: #f3f3f3;
+  --paper: #ffffff;
   --surface: #ffffff;
-  --surface-muted: #e8e8e8;
-  --surface-strong: #d8d8d8;
+  --surface-muted: #f1f1f1;
+  --surface-strong: #dddddd;
+  --proof-surface: #f0f7f8;
+  --proof-stage: #dcebed;
   --ink: #252525;
   --muted: #5e5e5e;
   --border: #aaaaaa;
@@ -130,8 +132,12 @@ p {
 h1 {
   margin-bottom: 0;
   font-size: clamp(30px, 3.6vw, 46px);
-  font-weight: 760;
-  line-height: 1.08;
+  font-weight: 800;
+  line-height: 1.04;
+}
+
+h1 span {
+  color: var(--paprika);
 }
 
 .task-intro p {
@@ -153,9 +159,10 @@ h1 {
   gap: 32px;
   margin-bottom: 12px;
   padding: 14px 18px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--ink);
   border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  color: white;
+  background: var(--ink);
 }
 
 .workbench-header h2,
@@ -196,7 +203,7 @@ h1 {
   position: absolute;
   left: -18px;
   content: "→";
-  color: var(--border-strong);
+  color: white;
   font-size: 15px;
 }
 
@@ -213,8 +220,9 @@ h1 {
 }
 
 .conversion-route li[data-state="current"] {
-  border-color: var(--paprika);
-  color: var(--paprika-dark);
+  border-color: var(--paprika-dark);
+  color: white;
+  background: var(--paprika);
 }
 
 .conversion-route li[data-state="done"] {
@@ -275,8 +283,28 @@ h1 {
   background: var(--surface);
 }
 
+.ready-summary {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ready-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ready-summary .secondary-button {
+  min-height: 36px;
+  padding: 7px 12px;
+}
+
 .preview-panel {
-  background: #ededed;
+  border-color: var(--ink);
+  background: var(--proof-surface);
 }
 
 .section-heading,
@@ -569,6 +597,7 @@ button:disabled {
   min-height: 36px;
   padding: 7px 11px;
   border: 0;
+  border-bottom: 3px solid transparent;
   color: var(--muted);
   background: transparent;
   font-size: 13px;
@@ -581,9 +610,9 @@ button:disabled {
 }
 
 .preview-tab[aria-pressed="true"] {
+  border-bottom-color: var(--paprika-dark);
   color: var(--ink);
   background: var(--surface);
-  box-shadow: inset 0 -3px 0 var(--paprika-dark);
 }
 
 .preview-tab:disabled,
@@ -710,7 +739,7 @@ progress {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
-  background: #d9d9d9;
+  background: var(--proof-stage);
 }
 
 .sheet-placeholder {
@@ -733,7 +762,7 @@ progress {
 
 .reader-page {
   aspect-ratio: 0.64;
-  border: 2px solid var(--ink);
+  border: 3px solid var(--paprika);
   border-radius: var(--radius-control);
 }
 
@@ -983,6 +1012,21 @@ footer {
   .app-shell[data-has-file="true"] .workbench-body,
   .app-shell[data-has-output="true"] .workbench-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell[data-has-output="true"]:not([data-editing-output="true"]) .job-panel {
+    padding-block: 12px;
+  }
+
+  .app-shell[data-has-output="true"]:not([data-editing-output="true"]) .ready-summary {
+    display: flex;
+  }
+
+  .app-shell[data-has-output="true"]:not([data-editing-output="true"]) .source-fields,
+  .app-shell[data-has-output="true"]:not([data-editing-output="true"]) .output-fields,
+  .app-shell[data-has-output="true"]:not([data-editing-output="true"]) .advanced-options,
+  .app-shell[data-has-output="true"]:not([data-editing-output="true"]) .actions {
+    display: none;
   }
 
   /* At high browser zoom levels the effective workbench width contracts. Keep

@@ -17,6 +17,10 @@ const dropHelp = document.querySelector("#drop-help");
 const fileFacts = document.querySelector("#file-facts");
 const fileName = document.querySelector("#file-name");
 const fileSize = document.querySelector("#file-size");
+const readySummary = document.querySelector("#ready-summary");
+const readyFile = document.querySelector("#ready-file");
+const readyFormat = document.querySelector("#ready-format");
+const editSettings = document.querySelector("#edit-settings");
 const convertButton = document.querySelector("#convert");
 const cancelButton = document.querySelector("#cancel");
 const download = document.querySelector("#download");
@@ -256,6 +260,8 @@ function clearSelectedFile() {
   dropHelp.textContent = "or drop one here";
   appShell.dataset.hasFile = "false";
   appShell.dataset.hasOutput = "false";
+  delete appShell.dataset.editingOutput;
+  readySummary.hidden = true;
   showEmptyPreview();
 }
 
@@ -317,6 +323,8 @@ function clearConversionReport() {
 
 function clearDownload() {
   appShell.dataset.hasOutput = "false";
+  delete appShell.dataset.editingOutput;
+  readySummary.hidden = true;
   blankPreviewFrame();
   epubPreview.clear();
   if (outputUrl) URL.revokeObjectURL(outputUrl);
@@ -480,6 +488,11 @@ function invalidateCompletedOutput() {
 
 previewSource.addEventListener("click", showSourcePreview);
 previewOutput.addEventListener("click", () => showOutputPreview());
+editSettings.addEventListener("click", () => {
+  appShell.dataset.editingOutput = "true";
+  readySummary.hidden = true;
+  format.focus();
+});
 previewPrevious.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex - 1));
 previewNext.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex + 1));
 
@@ -726,6 +739,10 @@ function completeJob(message) {
     images: message.imageCount,
     warnings: message.warnings,
   });
+  readyFile.textContent = selectedFile?.name ?? "PDF";
+  readyFormat.textContent = label;
+  readySummary.hidden = false;
+  delete appShell.dataset.editingOutput;
   appShell.dataset.hasOutput = "true";
   setFlow("success");
   setStatus("Ready", "", "success");

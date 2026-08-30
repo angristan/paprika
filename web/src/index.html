@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f3f3f3" />
+    <meta name="theme-color" content="#ffffff" />
     <meta
       name="description"
       content="Convert born-digital PDFs to compact, reflowable EPUB books locally in your browser."
@@ -22,7 +22,7 @@
 
     <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false">
       <section class="task-intro" aria-labelledby="page-title">
-        <h1 id="page-title">Turn a PDF into a book that fits.</h1>
+        <h1 id="page-title">Turn a PDF into <span>a book that fits.</span></h1>
         <p>Local PDF → EPUB. Preview before download.</p>
       </section>
 
@@ -47,6 +47,11 @@
 
         <div class="workbench-body">
           <form id="job-form" class="job-panel">
+            <div id="ready-summary" class="ready-summary" hidden>
+              <span><strong id="ready-file"></strong> · <span id="ready-format"></span></span>
+              <button id="edit-settings" class="secondary-button" type="button">Edit</button>
+            </div>
+
             <section class="source-fields" aria-labelledby="source-title">
               <div class="section-heading">
                 <h3 id="source-title">Source</h3>
