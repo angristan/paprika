@@ -78,7 +78,7 @@ The following screenshots were captured from a fresh local `web/dist/` build at 
 
 ![Desktop empty state](screenshots/desktop-empty.png)
 
-The first viewport is a restrained 1997-style desktop utility: one gray application window on a solid teal desktop, one navy title bar, familiar beveled controls, and a direct fixed-PDF-to-reflowed-book diagram. Paprika red is reserved for the main action and output edge. There are no patterns, fake counters, awards, window buttons, web rings, or dead navigation.
+The first viewport is a restrained early-web publishing page: a narrow white canvas, serif masthead, pixel pepper mark, blue links, thin rules, ordinary form controls, and a direct fixed-PDF-to-reflowed-book diagram. Paprika red is reserved for identity, the primary action, and the output edge. There is no simulated desktop, application chrome, pattern, fake counter, award, web ring, or dead navigation.
 
 ### Desktop, completed EPUB
 
@@ -104,20 +104,20 @@ The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chrom
 
 The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The redesign:
 
-- replaces generic product polish with one task-specific local utility window and a real PDF → EPUB route;
-- uses a solid teal desktop, one navy title bar, restrained gray chrome, and one Paprika action accent instead of patterns, gradients, glass, rounded cards, or decorative feature tiles;
-- keeps the task statement inside the setup pane instead of adding a detached marketing hero;
+- replaces both generic product polish and simulated application chrome with one task-specific publishing page and a real PDF → EPUB route;
+- uses a white canvas, serif masthead, pixel mark, blue links, thin rules, and one Paprika action accent instead of wallpaper, title bars, gradients, glass, rounded cards, or decorative feature tiles;
+- keeps the task statement inside the setup column instead of adding a detached marketing hero;
 - contracts the completed source into a useful docket and promotes the generated book;
 - preserves narrow-screen gutters, readable preview text, aligned counts, and familiar native controls; and
 - documents every application font, color, type-size role, and intentional nostalgic reference in `DESIGN.md`.
 
-The teal desktop, single title bar, square bevels, and native controls carry the 1990s reference without competing with the task. There are no rainbow accents, fake metrics, fake window controls, marquees, blinking body copy, cursor effects, or external assets. During real conversion, only three small packets in the **Local** divider animate. Serif text inside the preview belongs to the generated EPUB, not the application type system.
+Early-web typography, the pixel pepper, default link language, and document-like structure carry the 1990s reference without competing with the task. There are no nostalgia props, rainbow accents, fake metrics, fake browser controls, marquees, blinking body copy, cursor effects, or external assets. During real conversion, only three small packets in the **Local** divider animate. Serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 
 - `README.md` covers CLI behavior, browser limits and lifecycle, preview behavior, Cloudflare deployment, architecture, local development, and each validation command.
 - `docs/privacy.md` distinguishes local document processing from normal static-host request metadata, explains object-URL retention limits, and documents the separate EPUB-sandbox and browser-native PDF trust boundaries.
 - `docs/release.md` defines the locked release gate, required GitHub checks, pinned external inputs, exact Workers Builds settings, production smoke checks, and an approval-gated non-destructive rollback procedure.
-- `DESIGN.md` defines the quieter Paprika 97 desktop-utility direction, evidence requirements, 320-pixel behavior, intentional period references, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
+- `DESIGN.md` defines the Paprika early-web publishing direction, evidence requirements, 320-pixel behavior, intentional period references, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
 
 No production deployment or merge is part of this audit branch.

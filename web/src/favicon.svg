@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Paprika">
-  <path fill="#000080" d="M2 2h60v60H2z"/>
-  <path fill="#c0c0c0" d="M6 6h52v52H6z"/>
-  <path fill="#cc3300" d="M11 11h42v42H11z"/>
-  <path fill="#fff" d="M19 46V18h13c9 0 14 5 14 13 0 8-5 13-14 13h-5v2zm8-10h5c4 0 6-2 6-5s-2-5-6-5h-5z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Paprika pepper" shape-rendering="crispEdges">
+  <path fill="#006600" d="M17 2h5v4h4v4h-8V7h-4V4h3z"/>
+  <path fill="#a32900" d="M8 8h14v3h4v9h-3v4h-4v3h-5v3H9v-3H6v-5H4v-9h4z"/>
+  <path fill="#d94b20" d="M8 11h6v3h-3v9H8z"/>
+  <path fill="#751e00" d="M19 11h7v9h-3v4h-4z"/>
 </svg>

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#008080" />
+    <meta name="theme-color" content="#ffffff" />
     <meta
       name="description"
       content="Convert born-digital PDFs to compact, reflowable EPUB books locally in your browser."
@@ -15,16 +15,19 @@
   <body>
     <header class="site-header">
       <a class="wordmark" href="/" aria-label="Paprika home">
-        <strong>Paprika 97</strong>
-        <small>PDF → EPUB</small>
+        <img src="/favicon.svg" width="44" height="44" alt="" />
+        <span>
+          <strong>Paprika</strong>
+          <small>PDF to EPUB</small>
+        </span>
       </a>
-      <p class="local-mode"><span aria-hidden="true"></span>Local only</p>
+      <p class="local-mode">Local browser edition</p>
     </header>
 
     <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false" data-flow="empty">
       <section class="workbench" aria-labelledby="workbench-title">
         <header class="workbench-header">
-          <h2 id="workbench-title">PDF to EPUB</h2>
+          <h2 id="workbench-title">Convert a document</h2>
           <ol class="conversion-route" aria-label="Conversion progress">
             <li id="route-source" data-state="current">
               <span>Source</span>
@@ -44,7 +47,7 @@
         <div class="workbench-body">
           <form id="job-form" class="job-panel">
             <section class="task-intro" aria-labelledby="page-title">
-              <h1 id="page-title">Break the page.<span>Keep the book.</span></h1>
+              <h1 id="page-title">Turn a PDF <span>into a book.</span></h1>
               <p class="task-promise">PDF in. Reflowable EPUB out. Nothing uploaded.</p>
             </section>
 
