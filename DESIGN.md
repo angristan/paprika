@@ -25,13 +25,14 @@ The initial viewport must not be padded to fill the screen. Content height follo
 
 ## Visual system
 
-- **Color:** neutral white surfaces and graphite text. Paprika red is reserved for the primary action, focus, and meaningful state emphasis. Do not use cream, beige, parchment, sepia, or warm-paper palettes.
-- **Type:** use the operating system UI stack for interface and editorial text. Use monospace only for real machine values such as byte counts, dimensions, job identifiers, and technical status. Do not use or imitate Inter. Do not use crushed letter spacing.
-- **Scale:** use a moderate heading scale. The page title must read as a task heading, not an oversized hero statement.
+- **Color:** use the neutral scale `#ffffff`, `#f3f3f3`, `#ededed`, `#e8e8e8`, `#d9d9d9`, `#d8d8d8`, `#aaaaaa`, `#767676`, `#737373`, `#666666`, `#5e5e5e`, and `#252525`. Paprika action/state colors are `#c43d28` and `#942b1d`; success is `#296246` and error is `#a32d21`. Pale `#fff7f5` and `#fff4f1` surfaces are reserved for interactive hover and error feedback. Do not use cream, beige, parchment, sepia, or warm-paper palettes.
+- **Type:** use the operating system UI stack for application chrome and explanatory copy. Use monospace only for real machine values such as byte counts, dimensions, job identifiers, and technical status. The generated EPUB preview is document content rather than application chrome and may use the reader-oriented serif/sans-serif styles packaged with the book. Do not use or imitate Inter. Do not use crushed letter spacing.
+- **Scale:** core UI text uses 13, 14, 15, 16, 19, and 20 px steps. Twelve pixels is reserved for compact route/header text at narrow effective widths; 17 and 18 px are limited to the mark and compact result values. Task headings use 25 or 30 px at narrow widths and a responsive 30–48 px range on wide screens. The page title must read as a task heading, not an oversized hero statement.
 - **Shape:** controls and surfaces are square or use at most a 2 px radius. Shape must communicate grouping or affordance, not decoration.
-- **Depth:** use borders, spacing, and background contrast. Do not use decorative shadows, floating cards, glass effects, or the common hairline-border plus wide-shadow card treatment.
+- **Depth:** use borders, spacing, and neutral background contrast. Keep one outer boundary per task region; inner status and report sections use rules rather than nested cards. Do not use decorative shadows, floating cards, glass effects, or the common hairline-border plus wide-shadow card treatment.
 - **Spacing:** use tighter spacing inside controls and groups, and larger spacing only between task phases. Avoid monotonous spacing and avoid stretching sections to occupy the first viewport.
 - **Motion:** only use motion to show real progress or state change. Respect reduced-motion preferences.
+- **Signature:** the compact PDF → local composition → EPUB route and empty-preview sheet transformation explain the real workflow. They are functional diagrams, not decorative shape art. Paprika red borders and underlines indicate the current step or selected preview only.
 
 ## Explicit anti-patterns
 
