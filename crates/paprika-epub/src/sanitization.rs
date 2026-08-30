@@ -267,29 +267,43 @@ pub(super) fn document_identifier(input: &[u8]) -> String {
     format!("urn:paprika:{hash:016x}")
 }
 
-pub(super) fn first_heading(html: &str) -> Option<String> {
-    let mut first: Option<(usize, String)> = None;
-    for level in 1..=6 {
+pub(super) fn headings_in_document_order(html: &str) -> Vec<(u8, String)> {
+    let mut headings = Vec::new();
+    for level in 1..=6u8 {
         let open = format!("<h{level}>");
         let close = format!("</h{level}>");
-        let Some(start) = html.find(&open) else {
-            continue;
-        };
-        let content_start = start + open.len();
-        let Some(relative_end) = html[content_start..].find(&close) else {
-            continue;
-        };
-        let text = strip_markup(&html[content_start..content_start + relative_end]);
-        let meaningful = text
-            .chars()
-            .filter(|character| character.is_alphanumeric())
-            .count()
-            >= 2;
-        if meaningful && first.as_ref().is_none_or(|(position, _)| start < *position) {
-            first = Some((start, text));
+        let mut search_from = 0usize;
+        while let Some(relative_start) = html[search_from..].find(&open) {
+            let start = search_from + relative_start;
+            let content_start = start + open.len();
+            let Some(relative_end) = html[content_start..].find(&close) else {
+                break;
+            };
+            let content_end = content_start + relative_end;
+            let text = strip_markup(&html[content_start..content_end]);
+            if text
+                .chars()
+                .filter(|character| character.is_alphanumeric())
+                .count()
+                >= 2
+            {
+                headings.push((start, level, text.chars().take(120).collect()));
+            }
+            search_from = content_end + close.len();
         }
     }
-    first.map(|(_, heading)| heading.chars().take(120).collect())
+    headings.sort_unstable_by_key(|(position, _, _)| *position);
+    headings
+        .into_iter()
+        .map(|(_, level, text)| (level, text))
+        .collect()
+}
+
+pub(super) fn first_heading(html: &str) -> Option<String> {
+    headings_in_document_order(html)
+        .into_iter()
+        .next()
+        .map(|(_, heading)| heading)
 }
 
 pub(super) fn no_text_warning(image_count: usize) -> &'static str {

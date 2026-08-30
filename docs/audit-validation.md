@@ -20,6 +20,7 @@ This document records the acceptance evidence for the reliability and interface 
 | Browser failures are silent or leave stale state | Report sanitized diagnostics, reject stale worker generations, and recreate workers after cancel/failure | Cross-browser tests `cancels a job and converts again with a fresh worker`, `surfaces conversion warnings before download`, and `shows safe diagnostics and recovers from invalid input` |
 | Preview security boundaries are conflated | Keep generated EPUB XHTML sanitized and sandboxed; use the documented browser-native boundary for local PDF blobs | Cross-browser test `uses the documented local PDF preview boundary` plus `docs/privacy.md` |
 | Narrow and zoomed layouts clip controls | Remove minimum viewport assumptions, bound native controls and fieldsets, and include actionable overflow diagnostics | Cross-browser tests `keeps the conversion workbench usable at 320 CSS pixels` and `remains usable at 200 percent zoom` |
+| A centered paper title is split by two-column reading order | Reconstruct only the first semantic heading from matching display-sized geometry; lower wrapped rows also require confirmation from the selected document title so bylines stay separate | Geometry tests cover split and wrapped titles, same-style bylines, malformed bounds, and independent columns; pinned QuiCK and BERT conversions assert the complete chapter/navigation title and reject detached fragments |
 
 The Rust tests intentionally exercise failures, races, bounds, and observable output rather than mirroring internal call sequences.
 
@@ -31,18 +32,20 @@ The local release gate was run from the feature worktree:
 bun run predeploy
   rustfmt: passed
   Clippy --workspace --all-targets -D warnings: passed
-  workspace tests: 57 passed (CLI 4, core 14, EPUB 33, PDF 6)
+  workspace tests: 65 passed (CLI 4, core 14, EPUB 41, PDF 6)
   wasm32-unknown-unknown check: passed
   browser JavaScript bundle/static-entry checks: passed
   bounded fuzz-target compilation: passed
-  QuiCK conversion: 13 source pages, 13 text pages, 10 images
-  EPUBCheck 5.3.0: 0 fatals, 0 errors, 0 warnings
+  real-paper conversions: QuiCK, Attention Is All You Need, BERT, and Bitcoin
+  titles, bylines, source-page counts, semantic markers, and detached-fragment checks: passed
+  QuiCK `--no-images` title and no-asset checks: passed
+  EPUBCheck 5.3.0: 0 fatals, 0 errors, 0 warnings for all five outputs
   production WASM build: passed
   deploy-file allowlist and license comparison: passed
   wrangler deploy --dry-run: passed
 ```
 
-The [feature-branch workflow history](https://github.com/angristan/paprika/actions/workflows/pre-deploy.yml?query=branch%3Afeat%2Freliability-redesign) records the locked build job and native tests on Ubuntu 24.04, macOS 14, and Windows 2022. Its browser step runs 39 tests across Chromium, Firefox, and WebKit. Each engine runs the axe WCAG A/AA audit, local-only request check, 320 CSS-pixel layout check, 200% zoom check, EPUB conversion/download, warning, cancellation/retry, raster preview, and diagnostic-recovery cases.
+The [feature-branch workflow history](https://github.com/angristan/paprika/actions/workflows/pre-deploy.yml?query=branch%3Afeat%2Freliability-redesign) records the locked build job and native tests on Ubuntu 24.04, macOS 14, and Windows 2022. Its browser step runs 42 tests across Chromium, Firefox, and WebKit. Each engine runs the axe WCAG A/AA audit, local-only request check, 320 CSS-pixel layout check, 200% zoom check, synthetic EPUB conversion/download, the pinned real QuiCK title regression, warning, cancellation/retry, raster preview, and diagnostic-recovery cases.
 
 `main` branch protection requires these four exact checks with strict status checks and administrator enforcement:
 
@@ -56,16 +59,16 @@ The [feature-branch workflow history](https://github.com/angristan/paprika/actio
 Two consecutive executions of `scripts/build-web-cloudflare.sh` produced the same aggregate SHA-256 over every file in `web/dist/`:
 
 ```text
-551a1ff1c3bb089ea1ebe3b4ec74fc61eb84916664198ef7ba45ee4701f700f9
+53c6d687f305b2ec7ee2cb5c21ebc0e17268a4718e2b65de41d2aa20d5464e64
 ```
 
 The first execution populated the cache. The second finished without Rust compilation and restored verified WASM cache entry:
 
 ```text
-cfdc49986770288878f31fcceedeb4788ed18cb47edcb27238aa3ef754396f21
+792e92ef8c4e4c3d29917706c56e337c45b6fe60b2dcc3f6624d82b8766a864c
 ```
 
-The build scripts verify pinned SHA-256 values before executing or consuming downloaded rustup-init, wasm-pack archive/binary, EPUBCheck archive/JAR, and the QuiCK regression fixture. Cached WASM files have their own `SHA256SUMS`, and the cache key covers the pinned compiler, wasm-pack version, optimization mode, Rust flags, lockfile, manifests, Rust sources, and build script.
+The build scripts verify pinned SHA-256 values before executing or consuming downloaded rustup-init, wasm-pack archive/binary, EPUBCheck archive/JAR, and all four public paper fixtures. Cached WASM files have their own `SHA256SUMS`, and the cache key covers the pinned compiler, wasm-pack version, optimization mode, Rust flags, lockfile, manifests, Rust sources, and build script.
 
 ## Rendered review
 

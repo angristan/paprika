@@ -130,7 +130,7 @@ Run the release gates before submitting a change:
 
 ```bash
 bun run check       # Rust, WebAssembly, JavaScript, and fuzz-target checks
-bun run predeploy   # EPUBCheck, production build, distribution checks, dry run
+bun run predeploy   # real-paper title regressions, EPUBCheck, build, dry run
 bun run playwright install chromium firefox webkit
 bun run test:e2e    # Chromium, Firefox, and WebKit against loopback Wrangler
 ```

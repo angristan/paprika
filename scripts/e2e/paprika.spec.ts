@@ -1,4 +1,15 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+
+const QUICK_SHA256 = "90b16b703c680aa90291d6008cdaadeaa7d604a3889ee5d3bb347db4c81a06db";
+const QUICK_TITLE = "QuiCK: A Queuing System in CloudKit";
+const QUICK_FIXTURE = join(
+  process.env.PAPRIKA_TOOLS_DIR ?? join(homedir(), ".cache", "paprika-tools"),
+  "downloads",
+  `quick-${QUICK_SHA256}.pdf`,
+);
 
 function pdfFixture(pageTexts: string[]): Buffer {
   const objects = [
@@ -124,6 +135,18 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
   await page.locator("#download").click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("fixture.paprika.epub");
+});
+
+test("preserves the complete title of the real QuiCK paper", async ({ page }) => {
+  test.skip(!existsSync(QUICK_FIXTURE), "run bun run check:epub to cache the pinned paper fixture");
+  await page.goto("/");
+  await page.locator("#source-file").setInputFiles(QUICK_FIXTURE);
+  await page.locator("#convert").click();
+  await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
+
+  const preview = page.frameLocator("#preview-frame");
+  await expect(preview.locator("h2").first()).toHaveText(QUICK_TITLE);
+  await expect(preview.getByRole("heading", { name: "System in CloudKit", exact: true })).toHaveCount(0);
 });
 
 test("cancels a job and converts again with a fresh worker", async ({ page }) => {

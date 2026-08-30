@@ -28,6 +28,7 @@ use extraction::{
     extract_page_xhtml,
 };
 use figures::{FigureCrops, collect_figure_crops, page_may_have_figure_caption};
+use geometry::reconstruct_document_title;
 use images::{
     ImageDecodeBudget, PageImageCollection, account_image_objects, collect_page_images,
     source_page_bounds,
@@ -39,8 +40,9 @@ use math::{
 use model::SemanticPage;
 use packaging::{build_epub_preview, package_epub};
 use sanitization::{
-    document_identifier, enhance_algorithm_blocks, first_heading, no_text_warning,
-    normalized_language, normalized_title, visible_text_len,
+    document_identifier, enhance_algorithm_blocks, escape_xml, first_heading,
+    headings_in_document_order, no_text_warning, normalized_language, normalized_title,
+    visible_text_len,
 };
 
 const DEFAULT_LANGUAGE: &str = "en";
@@ -322,7 +324,7 @@ pub fn convert_pdf_to_epub_owned(
         )?;
         let page_image_bounds: Vec<Rect> =
             page_image_handles.iter().map(|image| image.bbox).collect();
-        let page_spans = if options.include_images {
+        let page_spans = if options.include_images || page_index == 0 {
             document.extract_spans(page_index).unwrap_or_else(|error| {
                 warnings.push(format!(
                     "Could not inspect positioned text from page {}: {error}",
@@ -457,6 +459,39 @@ pub fn convert_pdf_to_epub_owned(
             &page_extraction_options,
             &repeated_running_text,
         )?;
+        let reconstructed_title = if page_index == 0 {
+            let headings = headings_in_document_order(&html);
+            headings.first().and_then(|(level, heading)| {
+                let continuation_headings: Vec<String> = headings
+                    .iter()
+                    .skip(1)
+                    .filter(|(candidate_level, _)| candidate_level == level)
+                    .map(|(_, text)| text.clone())
+                    .collect();
+                source_page_bounds(&document, page_index).and_then(|bounds| {
+                    reconstruct_document_title(
+                        &page_spans,
+                        bounds,
+                        heading,
+                        &continuation_headings,
+                        &title,
+                    )
+                    .filter(|reconstructed| reconstructed.text != *heading)
+                })
+            })
+        } else {
+            None
+        };
+        if let Some(title) = reconstructed_title.as_ref() {
+            page_extraction_options.exclude_regions.push(title.bbox);
+            (_, html) = extract_page_xhtml(
+                &document,
+                page_index,
+                &page_extraction_options,
+                &repeated_running_text,
+            )?;
+            prepend_document_title(&mut html, &title.text);
+        }
         if !equation_anchors_are_unique(&html, &equations.images) {
             warnings.push(format!(
                 "Display equations from page {} remained as text because their reading position was ambiguous.",
@@ -464,12 +499,18 @@ pub fn convert_pdf_to_epub_owned(
             ));
             equations = EquationCrops::default();
             page_extraction_options.exclude_regions = crops.text_exclusions.clone();
+            if let Some(title) = reconstructed_title.as_ref() {
+                page_extraction_options.exclude_regions.push(title.bbox);
+            }
             (_, html) = extract_page_xhtml(
                 &document,
                 page_index,
                 &page_extraction_options,
                 &repeated_running_text,
             )?;
+            if let Some(title) = reconstructed_title.as_ref() {
+                prepend_document_title(&mut html, &title.text);
+            }
         }
         asset_bytes =
             asset_bytes
@@ -558,6 +599,10 @@ pub fn convert_pdf_to_epub_owned(
         warnings,
         preview,
     })
+}
+
+fn prepend_document_title(html: &mut String, title: &str) {
+    html.insert_str(0, &format!("<h2>{}</h2>\n", escape_xml(title)));
 }
 
 /// Parse, validate, and canonicalize a BCP 47 language tag.

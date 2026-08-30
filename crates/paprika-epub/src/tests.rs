@@ -8,7 +8,9 @@ use crate::extraction::{
 use crate::figures::{
     figure_graphic_region, page_may_have_figure_caption, tighten_regions_from_graphics,
 };
-use crate::geometry::{overlap_fraction, visual_page_regions};
+use crate::geometry::{
+    MAX_TITLE_SPANS, overlap_fraction, reconstruct_document_title, visual_page_regions,
+};
 use crate::images::{
     ImageDecodeBudget, account_image_objects, image_recovery_plan, reserve_image_decode,
 };
@@ -158,13 +160,179 @@ fn tightens_semantic_exclusion_to_graphic_bounds() {
 }
 
 fn test_span(text: &str, x: f32, y: f32, width: f32, font: &str) -> TextSpan {
+    sized_test_span(text, x, y, width, 10.0, font)
+}
+
+fn sized_test_span(text: &str, x: f32, y: f32, width: f32, font_size: f32, font: &str) -> TextSpan {
     TextSpan {
         text: text.to_string(),
-        bbox: Rect::new(x, y, width, 10.0),
+        bbox: Rect::new(x, y, width, font_size),
         font_name: font.to_string(),
-        font_size: 10.0,
+        font_size,
         ..Default::default()
     }
+}
+
+#[test]
+fn reconstructs_a_title_split_at_the_column_boundary() {
+    let spans = vec![
+        sized_test_span("QuiCK: A Queuing", 154.0, 696.0, 147.0, 17.2, "Times"),
+        sized_test_span("System in CloudKit", 306.0, 696.0, 151.0, 17.2, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "QuiCK: A Queuing",
+        &[],
+        "QuiCK: A Queuing System in CloudKit",
+    )
+    .unwrap();
+    assert_eq!(title.text, "QuiCK: A Queuing System in CloudKit");
+    assert!(title.bbox.x < 154.0);
+    assert!(title.bbox.x + title.bbox.width > 457.0);
+}
+
+#[test]
+fn reconstructs_a_wrapped_title_without_including_authors() {
+    let spans = vec![
+        sized_test_span(
+            "BERT: Pre-training of Deep Bidirectional Transformers for",
+            116.0,
+            760.0,
+            365.0,
+            14.3,
+            "Times",
+        ),
+        sized_test_span("Language Understanding", 221.0, 744.0, 156.0, 14.3, "Times"),
+        sized_test_span("Jacob Devlin", 122.0, 702.0, 66.0, 12.0, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "BERT: Pre-training",
+        &["Language Understanding".to_string()],
+        "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+    )
+    .unwrap();
+    assert_eq!(
+        title.text,
+        "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+    );
+    assert!(!title.text.contains("Jacob"));
+}
+
+#[test]
+fn preserves_standalone_title_punctuation() {
+    let spans = vec![
+        sized_test_span("Research", 100.0, 700.0, 70.0, 16.0, "Times"),
+        sized_test_span("&", 176.0, 700.0, 10.0, 16.0, "Times"),
+        sized_test_span("Practice", 192.0, 700.0, 66.0, 16.0, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "Research &",
+        &[],
+        "Research & Practice",
+    )
+    .unwrap();
+    assert_eq!(title.text, "Research & Practice");
+}
+
+#[test]
+fn does_not_join_independent_column_headings() {
+    let spans = vec![
+        sized_test_span("Left heading", 50.0, 700.0, 100.0, 16.0, "Times"),
+        sized_test_span("Right heading", 350.0, 700.0, 110.0, 16.0, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "Left heading",
+        &[],
+        "Left heading",
+    )
+    .unwrap();
+    assert_eq!(title.text, "Left heading");
+    assert!(title.bbox.x + title.bbox.width < 200.0);
+}
+
+#[test]
+fn does_not_absorb_a_similar_sized_byline() {
+    let spans = vec![
+        sized_test_span("A Complete", 160.0, 700.0, 100.0, 16.0, "Times"),
+        sized_test_span("Title", 265.0, 700.0, 40.0, 16.0, "Times"),
+        // Some extractors classify a centered byline at the same heading level
+        // and size. A split first line must still stop before this author row.
+        sized_test_span("Ada Author", 195.0, 684.0, 110.0, 16.0, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "A Complete",
+        &["Ada Author".to_string()],
+        "A Complete Title",
+    )
+    .unwrap();
+    assert_eq!(title.text, "A Complete Title");
+}
+
+#[test]
+fn stops_after_metadata_confirmed_wrapped_title() {
+    let spans = vec![
+        sized_test_span("Study", 160.0, 700.0, 50.0, 16.0, "Times"),
+        sized_test_span("for", 215.0, 700.0, 24.0, 16.0, "Times"),
+        sized_test_span("Language Understanding", 170.0, 684.0, 170.0, 16.0, "Times"),
+        sized_test_span("Ada Author", 195.0, 668.0, 110.0, 16.0, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "Study",
+        &[
+            "Language Understanding".to_string(),
+            "Ada Author".to_string(),
+        ],
+        "Study for Language Understanding",
+    )
+    .unwrap();
+    assert_eq!(title.text, "Study for Language Understanding");
+}
+
+#[test]
+fn ignores_title_geometry_outside_page_bounds() {
+    let spans = vec![
+        sized_test_span("Safe Title", 160.0, 700.0, 120.0, 16.0, "Times"),
+        sized_test_span("Oversized", 1.0, 700.0, f32::MAX, 16.0, "Times"),
+    ];
+    let title = reconstruct_document_title(
+        &spans,
+        Rect::new(0.0, 0.0, 612.0, 792.0),
+        "Safe Title",
+        &[],
+        "Safe Title",
+    )
+    .unwrap();
+    assert_eq!(title.text, "Safe Title");
+    assert!(title.bbox.x >= 0.0);
+    assert!(title.bbox.x + title.bbox.width <= 612.0);
+}
+
+#[test]
+fn refuses_excessive_title_geometry() {
+    let spans = (0..=MAX_TITLE_SPANS)
+        .map(|index| sized_test_span("Title", (index % 100) as f32, 700.0, 20.0, 16.0, "Times"))
+        .collect::<Vec<_>>();
+    assert!(
+        reconstruct_document_title(
+            &spans,
+            Rect::new(0.0, 0.0, 612.0, 792.0),
+            "Title",
+            &[],
+            "Title",
+        )
+        .is_none()
+    );
 }
 
 #[test]

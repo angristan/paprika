@@ -15,9 +15,9 @@ bun run predeploy
 bun run test:e2e
 ```
 
-`predeploy` runs locked Rust formatting, Clippy, tests, the wasm target check, JavaScript checks, a pinned EPUBCheck regression, the production WebAssembly build, deploy-file validation, and `wrangler deploy --dry-run`. Browser E2E starts a new Wrangler server on loopback; it never targets production or a branch preview.
+`predeploy` runs locked Rust formatting, Clippy, tests, the wasm target check, JavaScript checks, pinned real-paper EPUB regressions, the production WebAssembly build, deploy-file validation, and `wrangler deploy --dry-run`. Browser E2E starts a new Wrangler server on loopback; it never targets production or a branch preview.
 
-The EPUB check requires Java 17 or newer. It downloads EPUBCheck 5.3.0 and the public QuiCK regression PDF into the local cache, and verifies both pinned SHA-256 digests before execution.
+The EPUB check requires Java 17 or newer. It downloads EPUBCheck 5.3.0 plus four public paper fixtures into the local cache and verifies every pinned SHA-256 digest. It converts each paper, checks the reconstructed title, first-page byline, source-page count, and a stable semantic text marker, rejects known detached title fragments, and validates every EPUB with EPUBCheck. QuiCK also runs through `--no-images`. The subsequent browser suite reuses the pinned QuiCK fixture and checks the complete title in the generated EPUB preview.
 
 Because Cloudflare Workers Builds deploys every accepted `main` commit, the GitHub `main` branch protection rule is part of the production gate. It must require these current workflow checks before merge:
 
@@ -36,8 +36,11 @@ Pinned external inputs:
 | wasm-pack 0.15.0, Linux x86-64 musl archive | `c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a` |
 | EPUBCheck 5.3.0 archive | `6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5` |
 | FoundationDB QuiCK PDF fixture | `90b16b703c680aa90291d6008cdaadeaa7d604a3889ee5d3bb347db4c81a06db` |
+| Attention Is All You Need, arXiv `1706.03762v7` | `bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697` |
+| BERT, arXiv `1810.04805v2` | `5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e` |
+| Bitcoin whitepaper | `b1674191a88ec5cdd733e4240a81803105dc412d6c6708d53ab94fc248f4f553` |
 
-The first three values match publisher-hosted checksum metadata or GitHub release-asset digests. The QuiCK site does not publish a checksum; its value pins the reviewed bytes downloaded from the documented URL and detects any later change.
+The first three tool values match publisher-hosted checksum metadata or GitHub release-asset digests. The paper publishers do not provide these fixture checksums; the recorded values pin the reviewed bytes and detect any later change.
 
 ## Workers Builds settings
 

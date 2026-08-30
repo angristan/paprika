@@ -9,6 +9,286 @@ pub(super) struct SpanComponent {
     pub(super) bbox: Rect,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct ReconstructedTitle {
+    pub(super) text: String,
+    pub(super) bbox: Rect,
+}
+
+pub(super) const MAX_TITLE_SPANS: usize = 4_096;
+
+/// Recover a title that column-aware extraction split at the page midpoint.
+///
+/// PDF text order is often unrelated to visual order. In two-column papers, a
+/// centered title can therefore become one heading at the start of the left
+/// column and another near the end of the right column. The first semantic
+/// heading remains the anchor: geometry may only extend that exact text along
+/// the same display-sized line cluster, never replace it with an unrelated
+/// large label.
+pub(super) fn reconstruct_document_title(
+    spans: &[TextSpan],
+    page_bounds: Rect,
+    extracted_heading: &str,
+    continuation_headings: &[String],
+    expected_document_title: &str,
+) -> Option<ReconstructedTitle> {
+    let extracted_heading = normalize_title_text(extracted_heading);
+    let expected_document_title = normalize_title_text(expected_document_title);
+    let page_right = page_bounds.x + page_bounds.width;
+    let page_top = page_bounds.y + page_bounds.height;
+    if extracted_heading.is_empty()
+        || !page_bounds.x.is_finite()
+        || !page_bounds.y.is_finite()
+        || !page_right.is_finite()
+        || !page_top.is_finite()
+        || page_bounds.width <= 0.0
+        || page_bounds.height <= 0.0
+    {
+        return None;
+    }
+
+    let page_top_threshold = page_bounds.y + page_bounds.height * 0.6;
+    let maximum_font_size = spans
+        .iter()
+        .filter(|span| {
+            title_span_is_positioned(span, page_bounds, page_top_threshold)
+                && span.text.chars().any(char::is_alphanumeric)
+        })
+        .map(|span| span.font_size)
+        .max_by(f32::total_cmp)?;
+    let minimum_font_size = (maximum_font_size * 0.88).max(11.0);
+
+    let mut indices: Vec<usize> = (0..spans.len())
+        .filter(|index| {
+            let span = &spans[*index];
+            title_span_is_positioned(span, page_bounds, page_top_threshold)
+                && span.font_size >= minimum_font_size
+        })
+        .take(MAX_TITLE_SPANS + 1)
+        .collect();
+    if indices.len() > MAX_TITLE_SPANS {
+        return None;
+    }
+    indices.sort_by(|left, right| {
+        spans[*right]
+            .bbox
+            .y
+            .total_cmp(&spans[*left].bbox.y)
+            .then(spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x))
+    });
+
+    let baseline_tolerance = maximum_font_size * 0.45;
+    let mut rows: Vec<(f32, Vec<usize>)> = Vec::new();
+    for index in indices {
+        let center_y = spans[index].bbox.y + spans[index].bbox.height * 0.5;
+        if let Some((baseline, row)) = rows.last_mut()
+            && (center_y - *baseline).abs() <= baseline_tolerance
+        {
+            let count = row.len() as f32;
+            *baseline = (*baseline * count + center_y) / (count + 1.0);
+            row.push(index);
+        } else {
+            rows.push((center_y, vec![index]));
+        }
+    }
+    rows.sort_by(|left, right| right.0.total_cmp(&left.0));
+
+    let runs: Vec<(f32, Vec<TitleRun>)> = rows
+        .into_iter()
+        .map(|(baseline, row)| (baseline, title_runs_for_row(row, spans, maximum_font_size)))
+        .collect();
+    let mut matches = Vec::new();
+    for (row_index, (_, row_runs)) in runs.iter().enumerate() {
+        for (run_index, run) in row_runs.iter().enumerate() {
+            if run.text == extracted_heading
+                || run
+                    .text
+                    .strip_prefix(&extracted_heading)
+                    .is_some_and(|suffix| suffix.starts_with(' '))
+            {
+                matches.push((row_index, run_index));
+            }
+        }
+    }
+    let [(start_row, start_run)] = matches.as_slice() else {
+        return None;
+    };
+
+    let first = &runs[*start_row].1[*start_run];
+    let mut text = first.text.clone();
+    let mut bbox = first.bbox;
+    let mut previous_baseline = runs[*start_row].0;
+    // A lower row can be indistinguishable from an equally styled byline.
+    // Only use one when the selected document title independently confirms the
+    // reconstructed prefix; same-line repair does not need that extra cue.
+    let continuation_rows = if first.text != extracted_heading
+        && expected_document_title.starts_with(&first.text)
+        && expected_document_title != first.text
+    {
+        &runs[*start_row + 1..]
+    } else {
+        &runs[0..0]
+    };
+    for (baseline, row_runs) in continuation_rows {
+        if previous_baseline - *baseline > maximum_font_size * 1.2 {
+            break;
+        }
+        let Some(continuation) = row_runs
+            .iter()
+            .filter(|run| {
+                (run.font_size - first.font_size).abs() <= first.font_size * 0.03
+                    && title_runs_align(bbox, run.bbox, maximum_font_size)
+                    && continuation_headings.iter().any(|heading| {
+                        let heading = normalize_title_text(heading);
+                        run.text == heading
+                            || run
+                                .text
+                                .strip_prefix(&heading)
+                                .is_some_and(|suffix| suffix.starts_with(' '))
+                    })
+                    && expected_document_title
+                        .starts_with(&normalize_title_text(&format!("{text} {}", run.text)))
+            })
+            .max_by_key(|run| {
+                run.text
+                    .chars()
+                    .filter(|character| character.is_alphanumeric())
+                    .count()
+            })
+        else {
+            break;
+        };
+        if continuation.text.is_empty() {
+            break;
+        }
+        text.push(' ');
+        text.push_str(&continuation.text);
+        bbox = union_rect(bbox, continuation.bbox);
+        previous_baseline = *baseline;
+    }
+
+    let text = normalize_title_text(&text);
+    if text.len() > 200
+        || !text.starts_with(&extracted_heading)
+        || (text != first.text && text != expected_document_title)
+    {
+        return None;
+    }
+    Some(ReconstructedTitle {
+        text,
+        bbox: intersect_rect(expand_rect(bbox, 1.0), page_bounds)?,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct TitleRun {
+    text: String,
+    bbox: Rect,
+    font_size: f32,
+}
+
+fn title_span_is_positioned(span: &TextSpan, page_bounds: Rect, page_top_threshold: f32) -> bool {
+    let right = span.bbox.x + span.bbox.width;
+    let top = span.bbox.y + span.bbox.height;
+    span.rotation_degrees.abs() < 1.0
+        && span.artifact_type.is_none()
+        && span.font_size.is_finite()
+        && span.font_size > 0.0
+        && span.bbox.x.is_finite()
+        && span.bbox.y.is_finite()
+        && span.bbox.width.is_finite()
+        && span.bbox.height.is_finite()
+        && right.is_finite()
+        && top.is_finite()
+        && span.bbox.width >= 0.0
+        && span.bbox.width <= page_bounds.width
+        && span.bbox.height > 0.0
+        && span.bbox.height <= page_bounds.height * 0.2
+        && span.bbox.x >= page_bounds.x - 1.0
+        && right <= page_bounds.x + page_bounds.width + 1.0
+        && span.bbox.y >= page_bounds.y - 1.0
+        && top <= page_bounds.y + page_bounds.height + 1.0
+        && top >= page_top_threshold
+        && !span.text.is_empty()
+}
+
+fn title_runs_for_row(
+    mut indices: Vec<usize>,
+    spans: &[TextSpan],
+    maximum_font_size: f32,
+) -> Vec<TitleRun> {
+    indices.sort_by(|left, right| spans[*left].bbox.x.total_cmp(&spans[*right].bbox.x));
+    let mut groups = Vec::<Vec<usize>>::new();
+    let mut current = Vec::new();
+    let mut right_edge = f32::NEG_INFINITY;
+    for index in indices {
+        let span = &spans[index];
+        if !current.is_empty() && span.bbox.x - right_edge > maximum_font_size * 0.9 {
+            groups.push(std::mem::take(&mut current));
+        }
+        right_edge = right_edge.max(span.bbox.x + span.bbox.width);
+        current.push(index);
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    groups
+        .into_iter()
+        .filter_map(|indices| {
+            let text = title_run_text(&indices, spans);
+            (text
+                .chars()
+                .filter(|character| character.is_alphanumeric())
+                .count()
+                >= 2)
+                .then(|| {
+                    let font_size = indices
+                        .iter()
+                        .map(|index| spans[*index].font_size)
+                        .max_by(f32::total_cmp)
+                        .unwrap_or(maximum_font_size);
+                    let bbox = component_from_indices(indices, spans).bbox;
+                    TitleRun {
+                        text,
+                        bbox,
+                        font_size,
+                    }
+                })
+        })
+        .collect()
+}
+
+fn title_run_text(indices: &[usize], spans: &[TextSpan]) -> String {
+    let mut text = String::new();
+    let mut previous_right = None;
+    let mut previous_font_size = 0.0f32;
+    for index in indices {
+        let span = &spans[*index];
+        if let Some(right) = previous_right
+            && !text.ends_with(char::is_whitespace)
+            && !span.text.starts_with(char::is_whitespace)
+            && span.bbox.x - right > previous_font_size.max(span.font_size) * 0.08
+        {
+            text.push(' ');
+        }
+        text.push_str(&span.text);
+        previous_right = Some(span.bbox.x + span.bbox.width);
+        previous_font_size = span.font_size;
+    }
+    normalize_title_text(&text)
+}
+
+fn normalize_title_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn title_runs_align(left: Rect, right: Rect, font_size: f32) -> bool {
+    let overlap = (left.x + left.width).min(right.x + right.width) - left.x.max(right.x);
+    let center_distance = ((left.x + left.width * 0.5) - (right.x + right.width * 0.5)).abs();
+    overlap > 0.0 || center_distance <= left.width.max(right.width) * 0.35 + font_size
+}
+
 pub(super) fn visual_page_regions(
     spans: &[TextSpan],
     page_bounds: Rect,
