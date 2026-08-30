@@ -14,7 +14,8 @@ test.beforeEach(async ({ page }) => {
 
 test("serves the task-first local conversion workbench", async ({ page }) => {
   await expect(page).toHaveTitle(/Paprika/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("PDF");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Keep the book");
+  await expect(page.locator(".task-promise")).toContainText("PDF in. Reflowable EPUB out.");
   await expect(page.getByRole("region", { name: "Convert" })).toBeVisible();
   await expect(page.locator(".folio-spine")).toBeVisible();
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "empty");
@@ -48,6 +49,7 @@ test("uses the documented local PDF preview boundary", async ({ page }) => {
   await expect(page.locator("#preview-open")).toHaveAttribute("rel", /noopener/);
   await expect(page.locator("#preview-boundary")).toBeVisible();
   await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "source");
+  await expect(page.locator(".task-promise")).toContainText("Source loaded locally");
   await expect(page.getByRole("button", { name: "Make EPUB" })).toBeEnabled();
 });
 

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#ededed" />
+    <meta name="theme-color" content="#dcebed" />
     <meta
       name="description"
       content="Convert born-digital PDFs to compact, reflowable EPUB books locally in your browser."
@@ -21,11 +21,6 @@
     </header>
 
     <main id="app-shell" class="app-shell" data-has-file="false" data-has-output="false" data-flow="empty">
-      <section class="task-intro" aria-labelledby="page-title">
-        <h1 id="page-title">Turn a PDF into <span>a book that fits.</span></h1>
-        <p>Local PDF → EPUB. Preview before download.</p>
-      </section>
-
       <section class="workbench" aria-labelledby="workbench-title">
         <header class="workbench-header">
           <h2 id="workbench-title">Convert</h2>
@@ -47,6 +42,11 @@
 
         <div class="workbench-body">
           <form id="job-form" class="job-panel">
+            <section class="task-intro" aria-labelledby="page-title">
+              <h1 id="page-title">Break the page.<span>Keep the book.</span></h1>
+              <p class="task-promise">PDF in. Reflowable EPUB out. Nothing uploaded.</p>
+            </section>
+
             <div id="ready-summary" class="ready-summary" hidden>
               <div class="ready-document">
                 <span class="ready-label">Source</span>
@@ -56,6 +56,7 @@
                   <span class="visually-hidden">Output</span>
                   <span id="ready-format"></span>
                 </div>
+                <span id="ready-meta"></span>
               </div>
               <button id="edit-settings" class="secondary-button" type="button">Edit</button>
             </div>
@@ -205,6 +206,7 @@
           </form>
 
           <div class="folio-spine" aria-hidden="true">
+            <span class="spine-label">Reflow</span>
             <div class="spine-lines">
               <span></span>
               <span></span>

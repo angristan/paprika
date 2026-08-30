@@ -18,8 +18,10 @@ const fileFacts = document.querySelector("#file-facts");
 const fileName = document.querySelector("#file-name");
 const fileSize = document.querySelector("#file-size");
 const readySummary = document.querySelector("#ready-summary");
+const taskPromise = document.querySelector(".task-promise");
 const readyFile = document.querySelector("#ready-file");
 const readyFormat = document.querySelector("#ready-format");
+const readyMeta = document.querySelector("#ready-meta");
 const editSettings = document.querySelector("#edit-settings");
 const convertButton = document.querySelector("#convert");
 const cancelButton = document.querySelector("#cancel");
@@ -209,6 +211,13 @@ function setStatus(label, message, state = "idle") {
 
 function setFlow(state) {
   appShell.dataset.flow = state;
+  taskPromise.textContent = {
+    empty: "PDF in. Reflowable EPUB out. Nothing uploaded.",
+    "source-error": "Choose a valid local PDF to begin.",
+    ready: "Source loaded locally. Ready to reflow.",
+    working: "Reading and reflowing this PDF locally.",
+    error: "The source stays local. Adjust settings or retry.",
+  }[state] ?? "PDF in. Reflowable EPUB out. Nothing uploaded.";
   const routeStates = {
     empty: ["current", "pending", "pending"],
     "source-error": ["error", "pending", "pending"],
@@ -352,6 +361,11 @@ function showEmptyPreview() {
   previewControls.hidden = true;
   previewLimit.hidden = true;
   setSelectedPreviewTab("source");
+}
+
+function showPressPreview(state) {
+  showEmptyPreview();
+  previewStage.dataset.preview = state;
 }
 
 function setSelectedPreviewTab(tab) {
@@ -586,6 +600,7 @@ form.addEventListener("submit", async (event) => {
   cancelButton.hidden = false;
   progress.hidden = false;
   setFlow("working");
+  showPressPreview("working");
   setStatus("Starting", "Loading…", "working");
 
   const job = activeJob;
@@ -628,6 +643,8 @@ cancelButton.addEventListener("click", () => {
   updateOutputUI();
   convertButton.disabled = !selectedFile;
   setFlow(selectedFile ? "ready" : "empty");
+  if (selectedFile) showSourcePreview();
+  else showEmptyPreview();
   setStatus("Canceled", "No output saved.", "ready");
 });
 
@@ -751,6 +768,7 @@ function completeJob(message) {
   });
   readyFile.textContent = selectedFile?.name ?? "PDF";
   readyFormat.textContent = label;
+  readyMeta.textContent = `${message.pages} source page${message.pages === 1 ? "" : "s"}`;
   readySummary.hidden = false;
   delete appShell.dataset.editingOutput;
   appShell.dataset.hasOutput = "true";
@@ -823,6 +841,7 @@ function finishWithError(error) {
       error,
     );
   setFlow("error");
+  showPressPreview("error");
   setStatus("Could not convert", failure.message, "error");
   showDiagnostics(failure);
   finishJob();

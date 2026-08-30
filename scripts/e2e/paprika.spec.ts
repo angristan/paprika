@@ -131,6 +131,8 @@ test("cancels a job and converts again with a fresh worker", async ({ page }) =>
   await page.locator("#convert").click();
   await expect(page.locator("#cancel")).toBeVisible();
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "working");
+  await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "working");
+  await expect(page.locator(".task-promise")).toContainText("Reading and reflowing");
   await page.locator("#cancel").click();
   await expect(page.locator(".status-label")).toHaveText("Canceled");
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "ready");
@@ -139,6 +141,7 @@ test("cancels a job and converts again with a fresh worker", async ({ page }) =>
   await page.locator("#convert").click();
   await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
   await expect(page.locator("#source-page-count")).toHaveText("80");
+  await expect(page.locator("#ready-meta")).toHaveText("80 source pages");
   await expect(page.locator("#preview-limit")).toContainText("Preview capped at 12 pages");
   await expect(page.locator("#preview-limit")).toContainText("complete download");
 });
@@ -173,6 +176,7 @@ test("shows safe diagnostics and recovers from invalid input", async ({ page }) 
   await page.locator("#convert").click();
   await expect(page.locator(".status-label")).toHaveText("Could not convert", { timeout: 30_000 });
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "error");
+  await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "error");
   await expect(page.locator("#diagnostic-text")).toContainText("Document names and contents: omitted");
   await expect(page.locator("#diagnostic-text")).not.toContainText("broken.pdf");
 

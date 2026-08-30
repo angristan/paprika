@@ -56,7 +56,7 @@ The [feature-branch workflow history](https://github.com/angristan/paprika/actio
 Two consecutive executions of `scripts/build-web-cloudflare.sh` produced the same aggregate SHA-256 over every file in `web/dist/`:
 
 ```text
-8af9130303ccd943652ffc406ebbe4874cbdfd1b2dbe04e5e0cb364edbce3b36
+551a1ff1c3bb089ea1ebe3b4ec74fc61eb84916664198ef7ba45ee4701f700f9
 ```
 
 The first execution populated the cache. The second finished without Rust compilation and restored verified WASM cache entry:
@@ -75,19 +75,19 @@ The following screenshots were captured from a fresh local `web/dist/` build at 
 
 ![Desktop empty state](screenshots/desktop-empty.png)
 
-The first viewport is one open folio: source controls form the rigid left leaf, a Paprika seam carries the transformation, and the cool proofing field forms the flexible reader leaf. The route acts as a running head instead of a separate navigation bar. There are no gradients, glass panels, floating cards, fake metrics, or feature tiles.
+The first viewport is a high-contrast proof press: a solid Paprika source slab holds the task and controls, a black reflow gate carries the transformation, and a cool proofing field shows a fixed PDF page opening into a reflowable book. The route is integrated into the press header. There are no gradients, glass panels, floating cards, fake metrics, or feature tiles.
 
 ### Desktop, completed EPUB
 
 ![Desktop completed EPUB](screenshots/desktop-result.png)
 
-The completed state contracts the source leaf into a narrow editable file cover while the reader proof expands. It identifies the active preview, bounds prose to a readable measure, distinguishes the capped preview from complete-download totals, reports source/text/image counts, presents one warning summary before download, and gives the download one clear visual priority.
+The completed state contracts the source slab into a narrow docket with the filename, output format, source-page count, and **Edit** action while the reader proof expands. It identifies the active preview, bounds prose to a readable measure, distinguishes the capped preview from complete-download totals, reports source/text/image counts, presents one warning summary before download, and gives the download one clear visual priority.
 
 ### Mobile, 320 CSS pixels
 
 ![Mobile result at 320 CSS pixels](screenshots/mobile-result-320px.png)
 
-The folio closes into one column without horizontal scrolling. Its reflow seam turns downward between the compact file/format summary and reader proof; **Edit** restores the full labeled controls. Counts become full-width rows instead of compressed cards, and preview navigation, warnings, download, and privacy remain in document order.
+The press stacks into one column without horizontal scrolling. Its reflow gate turns downward between the compact source docket and reader proof; **Edit** restores the full labeled controls. Counts become full-width rows instead of compressed cards, and preview navigation, warnings, download, and privacy remain in document order.
 
 ### 200% zoom
 
@@ -101,20 +101,20 @@ The automated axe scan found no WCAG 2 A/AA or WCAG 2.1 A/AA violations in Chrom
 
 The rendered states were re-audited against the complete [Impeccable slop catalogue](https://impeccable.style/slop/#catalog). The remediation:
 
-- uses one folio boundary instead of separate cards for route, settings, and proof;
-- turns the route into an unboxed running head and contracts the completed source leaf;
-- uses the central reflow seam as the only high-color structural element;
+- replaces low-contrast neutral acreage with three semantic planes: Paprika source, black reflow gate, and cool proof;
+- integrates the task statement into the active source slab instead of adding a detached marketing hero;
+- turns the route into the press header and contracts the completed source into a useful docket;
 - removes duplicate status, helper, limitation, and privacy copy;
-- limits EPUB prose measure, preserves 16-pixel narrow-screen gutters, and turns mobile counts into aligned rows; and
+- limits EPUB prose measure, preserves narrow-screen gutters, and turns mobile counts into aligned rows; and
 - documents every application font, color, radius, type-size role, and intentional exception in `DESIGN.md`.
 
-The central Paprika seam and empty PDF → EPUB sheet transformation are intentional functional diagrams: they show fixed page lines being reflowed into a reader page and animate only during active conversion. The serif text inside the preview belongs to the generated EPUB, not the application type system.
+The Paprika source slab, black reflow gate, and fixed-page-to-open-book diagram intentionally encode the operation. During real conversion, only line fragments moving through the gate animate. The serif text inside the preview belongs to the generated EPUB, not the application type system.
 
 ## Documentation review
 
 - `README.md` covers CLI behavior, browser limits and lifecycle, preview behavior, Cloudflare deployment, architecture, local development, and each validation command.
 - `docs/privacy.md` distinguishes local document processing from normal static-host request metadata, explains object-URL retention limits, and documents the separate EPUB-sandbox and browser-native PDF trust boundaries.
 - `docs/release.md` defines the locked release gate, required GitHub checks, pinned external inputs, exact Workers Builds settings, production smoke checks, and an approval-gated non-destructive rollback procedure.
-- `DESIGN.md` defines the reflowing-folio direction, evidence requirements, 320-pixel behavior, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
+- `DESIGN.md` defines the Paprika Proof Press direction, evidence requirements, 320-pixel behavior, anti-pattern exclusions, keyboard/touch expectations, preview state, and reduced-motion behavior.
 
 No production deployment or merge is part of this audit branch.
