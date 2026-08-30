@@ -17,7 +17,7 @@ bun run test:e2e
 
 `predeploy` runs locked Rust formatting, Clippy, tests, the wasm target check, JavaScript checks, pinned real-paper EPUB regressions, the production WebAssembly build, deploy-file validation, and `wrangler deploy --dry-run`. Browser E2E starts a new Wrangler server on loopback; it never targets production or a branch preview.
 
-The EPUB check requires Java 17 or newer. It downloads EPUBCheck 5.3.0 plus four public paper fixtures into the local cache and verifies every pinned SHA-256 digest. It converts each paper, checks the reconstructed title, first-page byline, source-page count, and a stable semantic text marker, rejects known detached title fragments, and validates every EPUB with EPUBCheck. QuiCK also runs through `--no-images`. The subsequent browser suite reuses the pinned QuiCK fixture and checks the complete title in the generated EPUB preview.
+The EPUB check requires Java 17 or newer. It downloads EPUBCheck 5.3.0 plus four public paper fixtures into the local cache and verifies every pinned SHA-256 digest. It converts each paper, checks the reconstructed title, first-page byline, source-page count, and a stable semantic text marker, rejects known detached title fragments, and validates every EPUB with EPUBCheck. QuiCK also runs through `--no-images`. The subsequent browser suite reuses the pinned QuiCK fixture, selects the output preview, and checks the complete title in the downloaded EPUB.
 
 Because Cloudflare Workers Builds deploys every accepted `main` commit, the GitHub `main` branch protection rule is part of the production gate. It must require these current workflow checks before merge:
 

@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import { expect, test, type Page } from "@playwright/test";
 
 const QUICK_SHA256 = "90b16b703c680aa90291d6008cdaadeaa7d604a3889ee5d3bb347db4c81a06db";
@@ -39,6 +40,48 @@ function pdfFixture(pageTexts: string[]): Buffer {
   pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return Buffer.from(pdf);
+}
+
+function zipMember(path: string, expectedName: string): string {
+  const archive = readFileSync(path);
+  const minimumEocdOffset = Math.max(0, archive.length - 65_557);
+  let eocdOffset = -1;
+  for (let offset = archive.length - 22; offset >= minimumEocdOffset; offset -= 1) {
+    if (archive.readUInt32LE(offset) === 0x06054b50) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+  if (eocdOffset < 0) throw new Error("Downloaded EPUB has no ZIP directory.");
+
+  const entryCount = archive.readUInt16LE(eocdOffset + 10);
+  let offset = archive.readUInt32LE(eocdOffset + 16);
+  for (let index = 0; index < entryCount; index += 1) {
+    if (archive.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error("Downloaded EPUB has an invalid ZIP directory.");
+    }
+    const method = archive.readUInt16LE(offset + 10);
+    const compressedSize = archive.readUInt32LE(offset + 20);
+    const nameLength = archive.readUInt16LE(offset + 28);
+    const extraLength = archive.readUInt16LE(offset + 30);
+    const commentLength = archive.readUInt16LE(offset + 32);
+    const localOffset = archive.readUInt32LE(offset + 42);
+    const name = archive.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+    if (name === expectedName) {
+      if (archive.readUInt32LE(localOffset) !== 0x04034b50) {
+        throw new Error("Downloaded EPUB has an invalid ZIP entry.");
+      }
+      const localNameLength = archive.readUInt16LE(localOffset + 26);
+      const localExtraLength = archive.readUInt16LE(localOffset + 28);
+      const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+      const compressed = archive.subarray(dataOffset, dataOffset + compressedSize);
+      if (method === 0) return compressed.toString("utf8");
+      if (method === 8) return inflateRawSync(compressed).toString("utf8");
+      throw new Error(`Downloaded EPUB uses unsupported ZIP method ${method}.`);
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  throw new Error(`Downloaded EPUB is missing ${expectedName}.`);
 }
 
 async function selectPdf(page: Page, texts = ["Paprika local conversion test"]) {
@@ -144,9 +187,15 @@ test("preserves the complete title of the real QuiCK paper", async ({ page }) =>
   await page.locator("#convert").click();
   await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
 
-  const preview = page.frameLocator("#preview-frame");
-  await expect(preview.locator("h2").first()).toHaveText(QUICK_TITLE);
-  await expect(preview.getByRole("heading", { name: "System in CloudKit", exact: true })).toHaveCount(0);
+  await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "output");
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#download").click();
+  const download = await downloadPromise;
+  const path = await download.path();
+  if (!path) throw new Error("Browser did not provide the downloaded EPUB path.");
+  const firstChapter = zipMember(path, "OEBPS/text/page-0001.xhtml");
+  expect(firstChapter).toContain(`<h2>${QUICK_TITLE}</h2>`);
+  expect(firstChapter).not.toContain("<h2>System in CloudKit</h2>");
 });
 
 test("cancels a job and converts again with a fresh worker", async ({ page }) => {
