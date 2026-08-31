@@ -15,6 +15,8 @@ export class EpubPreview {
     this.stylesheetUrl = null;
     this.documentUrl = null;
     this.pageAssetUrls = [];
+    this.pageLoadHandler = null;
+    this.pageLoadGeneration = 0;
   }
 
   get pageCount() {
@@ -35,7 +37,7 @@ export class EpubPreview {
     );
   }
 
-  show(index) {
+  show(index, onLoad) {
     if (!this.manifest || !Number.isInteger(index) || index < 0 || index >= this.pageCount) {
       return null;
     }
@@ -100,6 +102,11 @@ export class EpubPreview {
       "default-src 'none'; img-src blob:; style-src blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
     );
     head.prepend(csp);
+    const pageLoadId = String(++this.pageLoadGeneration);
+    const pageMarker = document.createElementNS("http://www.w3.org/1999/xhtml", "meta");
+    pageMarker.setAttribute("name", "paprika-preview-page");
+    pageMarker.setAttribute("content", pageLoadId);
+    head.append(pageMarker);
     const stylesheet = document.createElementNS("http://www.w3.org/1999/xhtml", "link");
     stylesheet.setAttribute("rel", "stylesheet");
     stylesheet.setAttribute("href", this.stylesheetUrl);
@@ -109,7 +116,20 @@ export class EpubPreview {
     this.documentUrl = URL.createObjectURL(
       new Blob([serialized], { type: "application/xhtml+xml" }),
     );
+    if (typeof onLoad === "function") {
+      this.pageLoadHandler = () => {
+        const loadedPageId = this.frame.contentDocument
+          ?.querySelector('meta[name="paprika-preview-page"]')
+          ?.getAttribute("content");
+        if (loadedPageId !== pageLoadId) return;
+        this.cancelPendingPageLoad();
+        onLoad();
+      };
+      this.frame.addEventListener("load", this.pageLoadHandler);
+    }
+
     this.frame.title = `Generated EPUB preview — ${chapter.title}, source page ${chapter.source_page}`;
+    this.frame.src = "about:blank";
     this.frame.setAttribute("sandbox", "allow-same-origin");
     this.frame.src = this.documentUrl;
     return chapter;
@@ -124,7 +144,14 @@ export class EpubPreview {
     this.chapterIndex = 0;
   }
 
+  cancelPendingPageLoad() {
+    if (!this.pageLoadHandler) return;
+    this.frame.removeEventListener("load", this.pageLoadHandler);
+    this.pageLoadHandler = null;
+  }
+
   releasePageUrls() {
+    this.cancelPendingPageLoad();
     if (this.documentUrl) URL.revokeObjectURL(this.documentUrl);
     for (const url of this.pageAssetUrls) URL.revokeObjectURL(url);
     this.documentUrl = null;

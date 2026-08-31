@@ -191,12 +191,6 @@ test("animates EPUB page turns without overriding reduced motion", async ({ page
   const previous = page.locator("#preview-previous");
   const next = page.locator("#preview-next");
   await expect(previewStage).not.toHaveAttribute("data-page-turn", /.+/);
-  await previewFrame.evaluate((element) => {
-    element.dataset.testLoadCount = "0";
-    element.addEventListener("load", () => {
-      element.dataset.testLoadCount = String(Number(element.dataset.testLoadCount) + 1);
-    });
-  });
 
   await next.click();
   await expect(next).toBeFocused();
@@ -204,7 +198,6 @@ test("animates EPUB page turns without overriding reduced motion", async ({ page
   await expect(page.frameLocator("#preview-frame").locator("body")).toContainText(
     "Second preview page",
   );
-  await expect(previewFrame).toHaveAttribute("data-test-load-count", "1");
   await expect(previewStage).toHaveAttribute("data-page-turn", "next");
   await expect
     .poll(() => previewFrame.evaluate((element) => getComputedStyle(element).animationName))

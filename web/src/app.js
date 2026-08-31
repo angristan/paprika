@@ -449,11 +449,8 @@ function showOutputPreview(index = epubPreview.chapterIndex, pageTurn = null) {
         }
       }
     : null;
-  if (pageTurnHandler) previewFrame.addEventListener("load", pageTurnHandler, { once: true });
-
-  const chapter = epubPreview.show(index);
+  const chapter = epubPreview.show(index, pageTurnHandler);
   if (!chapter) {
-    if (pageTurnHandler) previewFrame.removeEventListener("load", pageTurnHandler);
     showEmptyPreview();
     return;
   }
