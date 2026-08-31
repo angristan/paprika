@@ -149,17 +149,11 @@ footer {
   text-transform: uppercase;
 }
 
-.local-mode {
+.edition-label {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
-}
-
-.local-mode::before {
-  margin-right: 6px;
-  color: var(--green);
-  content: "●";
 }
 
 .app-shell {

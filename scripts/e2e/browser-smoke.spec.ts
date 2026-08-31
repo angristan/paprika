@@ -15,7 +15,13 @@ test.beforeEach(async ({ page }) => {
 test("serves the task-first local conversion workbench", async ({ page }) => {
   await expect(page).toHaveTitle(/Paprika/);
   await expect(page.locator(".wordmark")).toContainText("Paprika");
-  await expect(page.locator(".local-mode")).toHaveText(/local browser edition/i);
+  const editionLabel = page.locator(".edition-label");
+  await expect(editionLabel).toHaveText(/local browser edition/i);
+  await expect(editionLabel.locator("*")).toHaveCount(0);
+  const marker = await editionLabel.evaluate(
+    (element) => getComputedStyle(element, "::before").content,
+  );
+  expect(marker).toBe("none");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("into a book");
   await expect(page.locator(".task-promise")).toContainText("PDF in. Reflowable EPUB out.");
   await expect(page.getByRole("region", { name: "Convert a document" })).toBeVisible();

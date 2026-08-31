@@ -59,7 +59,7 @@ Paprika should feel like a well-made publishing utility on the 1997 web, not a s
 - `--paprika: #a32900` and `--paprika-dark: #751e00` identify the pepper mark, masthead, primary action, and reflowed output edge.
 - `--green: #006600`, `--error: #8b0000`, and `--warning: #765000` carry semantic state.
 
-Do not add decorative colors. Color never carries state alone; labels, borders, and position must also communicate it.
+Do not add decorative colors. Color never carries state alone; labels, borders, and position must also communicate it. Static edition and privacy metadata stay plain text; they never use status dots or health indicators.
 
 ### Shape and depth
 
