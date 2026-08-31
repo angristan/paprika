@@ -17,7 +17,7 @@ Reloading or closing the tab ends the application session and the app releases i
 
 Opening the site makes ordinary HTTPS requests to Cloudflare for static HTML, CSS, JavaScript, WebAssembly, and icons. Cloudflare and network operators can observe normal request metadata such as IP address, time, requested asset, user agent, and transport information according to their own policies. Paprika does not include document bytes in those requests.
 
-The source PDF preview and generated EPUB/PDF preview use local `blob:` URLs. The application does not follow remote image references from source PDF text into EPUB content.
+The source and generated PDF previews use local `blob:` URLs. Generated EPUB chapters use local, sanitized `srcdoc` content with `blob:` URLs only for allowed styles and images. The application does not follow remote image references from source PDF text into EPUB content.
 
 ## Preview sandbox boundary
 

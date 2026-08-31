@@ -181,6 +181,8 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
 });
 
 test("animates EPUB page turns without overriding reduced motion", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await selectPdf(page, ["First preview page", "Second preview page", "Third preview page"]);
   await page.locator("#convert").click();
@@ -223,6 +225,7 @@ test("animates EPUB page turns without overriding reduced motion", async ({ page
   expect(await previewFrame.evaluate((element) => getComputedStyle(element).animationName)).toBe(
     "none",
   );
+  expect(pageErrors).toEqual([]);
 });
 
 test("preserves the complete title of the real QuiCK paper", async ({ page }) => {

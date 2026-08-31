@@ -263,8 +263,9 @@ function animatePreviewPage(direction) {
 function blankPreviewFrame() {
   clearPreviewPageTurn();
   previewFrame.hidden = true;
-  previewFrame.src = "about:blank";
+  previewFrame.removeAttribute("srcdoc");
   previewFrame.setAttribute("sandbox", "allow-same-origin");
+  previewFrame.src = "about:blank";
   previewFrame.title = "Document preview";
 }
 
@@ -391,8 +392,9 @@ function showPdfPreview(url, title) {
   if (!url?.startsWith("blob:")) {
     throw new Error("The PDF preview URL was not created by this browser tab.");
   }
-  previewFrame.src = "about:blank";
+  previewFrame.removeAttribute("srcdoc");
   previewFrame.removeAttribute("sandbox");
+  previewFrame.src = "about:blank";
   previewFrame.title = title;
   previewFrame.src = url;
 }

@@ -13,7 +13,6 @@ export class EpubPreview {
     this.assetBuffers = [];
     this.chapterIndex = 0;
     this.stylesheetUrl = null;
-    this.documentUrl = null;
     this.pageAssetUrls = [];
     this.pageLoadHandler = null;
     this.pageLoadGeneration = 0;
@@ -114,38 +113,29 @@ export class EpubPreview {
     head.append(stylesheet);
 
     const serialized = new XMLSerializer().serializeToString(document);
-    this.documentUrl = URL.createObjectURL(
-      new Blob([serialized], { type: "application/xhtml+xml" }),
-    );
-    const documentUrl = this.documentUrl;
-    let waitingForBlankReset = this.frame.contentDocument?.URL !== "about:blank";
     this.pageLoadHandler = () => {
       if (this.pageLoadGeneration !== pageLoadGeneration) return;
-      const loadedDocument = this.frame.contentDocument;
-      const loadedPageId = loadedDocument
-        ?.querySelector('meta[name="paprika-preview-page"]')
-        ?.getAttribute("content");
-      if (loadedPageId === pageLoadId) {
-        this.cancelPendingPageLoad();
-        if (typeof onLoad === "function") onLoad();
+      let loadedPageId;
+      try {
+        loadedPageId = this.frame.contentDocument
+          ?.querySelector('meta[name="paprika-preview-page"]')
+          ?.getAttribute("content");
+      } catch {
         return;
       }
-      if (waitingForBlankReset && loadedDocument?.URL === "about:blank") {
-        waitingForBlankReset = false;
-        this.frame.src = documentUrl;
-      }
+      if (loadedPageId !== pageLoadId) return;
+      this.cancelPendingPageLoad();
+      if (typeof onLoad === "function") onLoad();
     };
     this.frame.addEventListener("load", this.pageLoadHandler);
 
     this.frame.title = `Generated EPUB preview — ${chapter.title}, source page ${chapter.source_page}`;
     this.frame.setAttribute("sandbox", "allow-same-origin");
-    if (waitingForBlankReset) {
-      // WebKit can commit this reset after an immediately assigned blob URL. Wait for
-      // the blank document before starting the final chapter navigation.
-      this.frame.src = "about:blank";
-    } else {
-      this.frame.src = documentUrl;
-    }
+    // A blob document inherits the app response's `frame-ancestors 'none'` policy in
+    // WebKit. `srcdoc` keeps this already-sanitized chapter local without a document
+    // request, while blob URLs remain limited to inert styles and images.
+    this.frame.srcdoc = serialized;
+    this.frame.removeAttribute("src");
     return chapter;
   }
 
@@ -166,9 +156,7 @@ export class EpubPreview {
 
   releasePageUrls() {
     this.cancelPendingPageLoad();
-    if (this.documentUrl) URL.revokeObjectURL(this.documentUrl);
     for (const url of this.pageAssetUrls) URL.revokeObjectURL(url);
-    this.documentUrl = null;
     this.pageAssetUrls = [];
   }
 }
