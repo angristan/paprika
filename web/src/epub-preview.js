@@ -102,7 +102,8 @@ export class EpubPreview {
       "default-src 'none'; img-src blob:; style-src blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
     );
     head.prepend(csp);
-    const pageLoadId = String(++this.pageLoadGeneration);
+    const pageLoadGeneration = ++this.pageLoadGeneration;
+    const pageLoadId = String(pageLoadGeneration);
     const pageMarker = document.createElementNS("http://www.w3.org/1999/xhtml", "meta");
     pageMarker.setAttribute("name", "paprika-preview-page");
     pageMarker.setAttribute("content", pageLoadId);
@@ -116,22 +117,35 @@ export class EpubPreview {
     this.documentUrl = URL.createObjectURL(
       new Blob([serialized], { type: "application/xhtml+xml" }),
     );
-    if (typeof onLoad === "function") {
-      this.pageLoadHandler = () => {
-        const loadedPageId = this.frame.contentDocument
-          ?.querySelector('meta[name="paprika-preview-page"]')
-          ?.getAttribute("content");
-        if (loadedPageId !== pageLoadId) return;
+    const documentUrl = this.documentUrl;
+    let waitingForBlankReset = this.frame.contentDocument?.URL !== "about:blank";
+    this.pageLoadHandler = () => {
+      if (this.pageLoadGeneration !== pageLoadGeneration) return;
+      const loadedDocument = this.frame.contentDocument;
+      const loadedPageId = loadedDocument
+        ?.querySelector('meta[name="paprika-preview-page"]')
+        ?.getAttribute("content");
+      if (loadedPageId === pageLoadId) {
         this.cancelPendingPageLoad();
-        onLoad();
-      };
-      this.frame.addEventListener("load", this.pageLoadHandler);
-    }
+        if (typeof onLoad === "function") onLoad();
+        return;
+      }
+      if (waitingForBlankReset && loadedDocument?.URL === "about:blank") {
+        waitingForBlankReset = false;
+        this.frame.src = documentUrl;
+      }
+    };
+    this.frame.addEventListener("load", this.pageLoadHandler);
 
     this.frame.title = `Generated EPUB preview — ${chapter.title}, source page ${chapter.source_page}`;
-    this.frame.src = "about:blank";
     this.frame.setAttribute("sandbox", "allow-same-origin");
-    this.frame.src = this.documentUrl;
+    if (waitingForBlankReset) {
+      // WebKit can commit this reset after an immediately assigned blob URL. Wait for
+      // the blank document before starting the final chapter navigation.
+      this.frame.src = "about:blank";
+    } else {
+      this.frame.src = documentUrl;
+    }
     return chapter;
   }
 
