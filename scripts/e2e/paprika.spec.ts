@@ -180,6 +180,58 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
   expect(download.suggestedFilename()).toBe("fixture.paprika.epub");
 });
 
+test("animates EPUB page turns without overriding reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await selectPdf(page, ["First preview page", "Second preview page", "Third preview page"]);
+  await page.locator("#convert").click();
+  await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
+
+  const previewStage = page.locator("#preview-stage");
+  const previewFrame = page.locator("#preview-frame");
+  const previous = page.locator("#preview-previous");
+  const next = page.locator("#preview-next");
+  await expect(previewStage).not.toHaveAttribute("data-page-turn", /.+/);
+  await previewFrame.evaluate((element) => {
+    element.dataset.testLoadCount = "0";
+    element.addEventListener("load", () => {
+      element.dataset.testLoadCount = String(Number(element.dataset.testLoadCount) + 1);
+    });
+  });
+
+  await next.click();
+  await expect(next).toBeFocused();
+  await expect(page.locator("#preview-position")).toContainText("Page 2 of 3");
+  await expect(page.frameLocator("#preview-frame").locator("body")).toContainText(
+    "Second preview page",
+  );
+  await expect(previewFrame).toHaveAttribute("data-test-load-count", "1");
+  await expect(previewStage).toHaveAttribute("data-page-turn", "next");
+  await expect
+    .poll(() => previewFrame.evaluate((element) => getComputedStyle(element).animationName))
+    .toBe("epub-page-next");
+
+  await next.click();
+  await expect(page.locator("#preview-position")).toContainText("Page 3 of 3");
+  await previous.click();
+  await expect(previous).toBeFocused();
+  await expect(page.locator("#preview-position")).toContainText("Page 2 of 3");
+  await expect(previewStage).toHaveAttribute("data-page-turn", "previous");
+  await expect
+    .poll(() => previewFrame.evaluate((element) => getComputedStyle(element).animationName))
+    .toBe("epub-page-previous");
+
+  await page.locator("#preview-source").click();
+  await page.locator("#preview-output").click();
+  await expect(previewStage).not.toHaveAttribute("data-page-turn", /.+/);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await next.click();
+  await expect(previewStage).toHaveAttribute("data-page-turn", "next");
+  expect(await previewFrame.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+    "none",
+  );
+});
+
 test("preserves the complete title of the real QuiCK paper", async ({ page }) => {
   test.skip(!existsSync(QUICK_FIXTURE), "run bun run check:epub to cache the pinned paper fixture");
   await page.goto("/");

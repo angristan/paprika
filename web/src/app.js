@@ -76,6 +76,7 @@ let nextJobId = 1;
 let outputUrl = null;
 let sourceUrl = null;
 let outputFormat = null;
+let previewPageTurnGeneration = 0;
 
 class BrowserFailure extends Error {
   constructor(code, stage, userMessage, causeName = "Error") {
@@ -247,7 +248,20 @@ function setFlow(state) {
   routeResult.querySelector("span").textContent = state === "success" ? "Ready" : "Result";
 }
 
+function clearPreviewPageTurn() {
+  previewPageTurnGeneration += 1;
+  delete previewStage.dataset.pageTurn;
+}
+
+function animatePreviewPage(direction) {
+  if (direction !== "next" && direction !== "previous") return;
+  clearPreviewPageTurn();
+  void previewFrame.offsetWidth;
+  previewStage.dataset.pageTurn = direction;
+}
+
 function blankPreviewFrame() {
+  clearPreviewPageTurn();
   previewFrame.hidden = true;
   previewFrame.src = "about:blank";
   previewFrame.setAttribute("sandbox", "allow-same-origin");
@@ -402,8 +416,10 @@ function showSourcePreview() {
   setSelectedPreviewTab("source");
 }
 
-function showOutputPreview(index = epubPreview.chapterIndex) {
+function showOutputPreview(index = epubPreview.chapterIndex, pageTurn = null) {
   if (!outputUrl || !outputFormat) return;
+  clearPreviewPageTurn();
+  const pageTurnGeneration = previewPageTurnGeneration;
   previewStage.dataset.preview = outputFormat === "pdf" ? "pdf" : "output";
   previewBoundary.hidden = outputFormat !== "pdf";
   sheet.hidden = true;
@@ -421,8 +437,23 @@ function showOutputPreview(index = epubPreview.chapterIndex) {
     return;
   }
 
+  const pageTurnHandler = pageTurn === "next" || pageTurn === "previous"
+    ? () => {
+        if (
+          previewStage.dataset.preview === "output"
+          && outputFormat === "epub"
+          && epubPreview.chapterIndex === index
+          && previewPageTurnGeneration === pageTurnGeneration
+        ) {
+          animatePreviewPage(pageTurn);
+        }
+      }
+    : null;
+  if (pageTurnHandler) previewFrame.addEventListener("load", pageTurnHandler, { once: true });
+
   const chapter = epubPreview.show(index);
   if (!chapter) {
+    if (pageTurnHandler) previewFrame.removeEventListener("load", pageTurnHandler);
     showEmptyPreview();
     return;
   }
@@ -517,8 +548,12 @@ editSettings.addEventListener("click", () => {
   readySummary.hidden = true;
   format.focus();
 });
-previewPrevious.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex - 1));
-previewNext.addEventListener("click", () => showOutputPreview(epubPreview.chapterIndex + 1));
+previewPrevious.addEventListener("click", () => {
+  showOutputPreview(epubPreview.chapterIndex - 1, "previous");
+});
+previewNext.addEventListener("click", () => {
+  showOutputPreview(epubPreview.chapterIndex + 1, "next");
+});
 
 format.addEventListener("change", () => {
   if (outputUrl) clearDownload();

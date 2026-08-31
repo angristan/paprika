@@ -77,7 +77,7 @@ Do not add decorative colors. Color never carries state alone; labels, borders, 
 
 ### Signature
 
-The pixel pepper mark and the simple fixed-page-to-reflowed-page diagram carry the identity. The narrow **Local** divider shows three restrained packets only while conversion is running. Reduced-motion mode removes packet movement without removing status.
+The pixel pepper mark and the simple fixed-page-to-reflowed-page diagram carry the identity. The narrow **Local** divider shows three restrained packets only while conversion is running. EPUB navigation gives the incoming book page a short 240 ms directional hinge-and-slide: **Next** enters from the right edge and **Previous** from the left. The first result, source/PDF previews, and tab switches do not animate. Reduced-motion mode removes all packet and page movement without removing status or navigation feedback.
 
 ## Deliberate 1990s references
 
@@ -93,6 +93,7 @@ The pixel pepper mark and the simple fixed-page-to-reflowed-page diagram carry t
 - Status changes remain in the polite live region. Errors use text and geometry, never color alone.
 - Primary controls remain at least 44 px high. Supporting text remains at least 11 px.
 - Source and generated previews identify the active document and trust boundary.
+- EPUB page motion follows explicit **Previous** and **Next** navigation, never autoplay, and does not replace the native button semantics.
 - A successful result retains source identity; **Edit** restores every setting without discarding the output.
 - Cancellation keeps the source selected and states what was discarded.
 - The layout must not overflow at 320 CSS pixels or 200% zoom.
