@@ -162,7 +162,7 @@ test("converts and downloads an EPUB with report metadata", async ({ page }) => 
   await expect(page.locator("#preview-output")).toBeEnabled();
   await expect(page.locator("#preview-stage")).toHaveAttribute("data-preview", "output");
   await expect(page.locator("#preview-boundary")).toBeHidden();
-  await expect(page.locator("#preview-position")).toContainText("scroll to read");
+  await expect(page.locator("#preview-position")).toHaveText("Source 1 · Page 1 of 1");
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "success");
   await expect(page.locator("#ready-summary")).toBeVisible();
   await expect(page.locator(".source-fields")).toBeHidden();
@@ -196,7 +196,7 @@ test("animates EPUB page turns without overriding reduced motion", async ({ page
 
   await next.click();
   await expect(next).toBeFocused();
-  await expect(page.locator("#preview-position")).toContainText("Page 2 of 3");
+  await expect(page.locator("#preview-position")).toHaveText("Source 2 · Page 1 of 1");
   await expect(page.frameLocator("#preview-frame").locator("body")).toContainText(
     "Second preview page",
   );
@@ -206,10 +206,10 @@ test("animates EPUB page turns without overriding reduced motion", async ({ page
     .toBe("epub-page-next");
 
   await next.click();
-  await expect(page.locator("#preview-position")).toContainText("Page 3 of 3");
+  await expect(page.locator("#preview-position")).toHaveText("Source 3 · Page 1 of 1");
   await previous.click();
   await expect(previous).toBeFocused();
-  await expect(page.locator("#preview-position")).toContainText("Page 2 of 3");
+  await expect(page.locator("#preview-position")).toHaveText("Source 2 · Page 1 of 1");
   await expect(previewStage).toHaveAttribute("data-page-turn", "previous");
   await expect
     .poll(() => previewFrame.evaluate((element) => getComputedStyle(element).animationName))
@@ -262,7 +262,7 @@ test("cancels a job and converts again with a fresh worker", async ({ page }) =>
   await expect(page.locator(".status-label")).toHaveText("Ready", { timeout: 120_000 });
   await expect(page.locator("#source-page-count")).toHaveText("80");
   await expect(page.locator("#ready-meta")).toHaveText("80 source pages");
-  await expect(page.locator("#preview-limit")).toContainText("Preview capped at 12 pages");
+  await expect(page.locator("#preview-limit")).toContainText("Preview capped at 12 source pages");
   await expect(page.locator("#preview-limit")).toContainText("complete download");
 });
 

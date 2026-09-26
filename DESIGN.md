@@ -25,6 +25,7 @@ Use a warm paper background, brown text, and paprika red for the file picker and
 - Keep filenames and diagnostics within the viewport at 320 px and 200% zoom.
 - Edit restores the form without discarding the output. Cancel keeps the selected source.
 - Respect reduced motion for preview navigation.
+- Paginate EPUB previews at a readable text size within the available height. Previous/Next traverses each screen of a source page before moving to the next source page. Recalculate pagination when the reader resizes; keep the downloaded EPUB unchanged.
 
 ## Privacy
 

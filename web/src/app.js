@@ -67,7 +67,7 @@ const routeCompose = document.querySelector("#route-compose");
 const routeResult = document.querySelector("#route-result");
 const routeResultFormat = document.querySelector("#route-result-format");
 
-const epubPreview = new EpubPreview(previewFrame);
+const epubPreview = new EpubPreview(previewFrame, updatePreviewControls);
 let selectedFile = null;
 let worker = null;
 let workerRecycleTimer = null;
@@ -455,19 +455,39 @@ function showOutputPreview(index = epubPreview.chapterIndex, pageTurn = null) {
         }
       }
     : null;
-  const chapter = epubPreview.show(index, pageTurnHandler);
+  const readerPage = pageTurn === "previous" ? -1 : pageTurn === "next" ? 0 : epubPreview.readerPage;
+  const chapter = epubPreview.show(index, pageTurnHandler, readerPage);
   if (!chapter) {
     showEmptyPreview();
     return;
   }
-  previewControls.hidden = epubPreview.pageCount <= 1;
-  previewPrevious.disabled = epubPreview.chapterIndex === 0;
-  previewNext.disabled = epubPreview.chapterIndex + 1 >= epubPreview.pageCount;
-  previewPosition.textContent = `Page ${epubPreview.chapterIndex + 1} of ${epubPreview.pageCount} · source ${chapter.source_page} · scroll to read`;
+  previewControls.hidden = false;
+  previewPrevious.disabled = true;
+  previewNext.disabled = true;
+  previewPosition.textContent = "Loading page…";
   previewLimit.hidden = !epubPreview.truncated;
   previewLimit.textContent = epubPreview.truncated
-    ? `Preview capped at ${epubPreview.pageCount} pages. Totals below cover the complete download.`
+    ? `Preview capped at ${epubPreview.pageCount} source pages. Totals below cover the complete download.`
     : "";
+}
+
+function updatePreviewControls() {
+  const chapter = epubPreview.manifest?.chapters[epubPreview.chapterIndex];
+  if (!chapter || previewStage.dataset.preview !== "output") return;
+  previewControls.hidden = false;
+  previewPrevious.disabled = epubPreview.chapterIndex === 0 && epubPreview.readerPage === 0;
+  previewNext.disabled = epubPreview.chapterIndex + 1 >= epubPreview.pageCount
+    && epubPreview.readerPage + 1 >= epubPreview.readerPageCount;
+  previewPosition.textContent = `Source ${chapter.source_page} · Page ${epubPreview.readerPage + 1} of ${epubPreview.readerPageCount}`;
+}
+
+function turnPreviewPage(direction) {
+  if (epubPreview.turnPage(direction === "next" ? 1 : -1)) {
+    clearPreviewPageTurn();
+    animatePreviewPage(direction);
+  } else {
+    showOutputPreview(epubPreview.chapterIndex + (direction === "next" ? 1 : -1), direction);
+  }
 }
 
 function setJobControlsDisabled(disabled) {
@@ -552,10 +572,10 @@ editSettings.addEventListener("click", () => {
   format.focus();
 });
 previewPrevious.addEventListener("click", () => {
-  showOutputPreview(epubPreview.chapterIndex - 1, "previous");
+  turnPreviewPage("previous");
 });
 previewNext.addEventListener("click", () => {
-  showOutputPreview(epubPreview.chapterIndex + 1, "next");
+  turnPreviewPage("next");
 });
 
 format.addEventListener("change", () => {

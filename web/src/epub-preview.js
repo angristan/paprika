@@ -2,9 +2,22 @@ const PREVIEW_ORIGIN = "https://preview.invalid/OEBPS/";
 const ALLOWED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 const MAX_STYLESHEET_BYTES = 512 * 1024;
 const MAX_CHAPTER_BYTES = 2 * 1024 * 1024;
+const READER_CSS = `
+html { height: 100%; overflow: hidden; }
+body {
+  box-sizing: border-box; width: 100%; max-width: none; height: 100%;
+  margin: 0; padding: 24px; overflow: hidden;
+}
+main {
+  height: 100%; column-width: calc(100vw - 48px); column-gap: 48px;
+  column-fill: auto; overflow-wrap: anywhere;
+}
+img { object-fit: contain; max-height: calc(100vh - 112px); }
+figure img { width: auto; max-width: 100%; }
+`;
 
 export class EpubPreview {
-  constructor(frame) {
+  constructor(frame, onLayout = () => {}) {
     if (!(frame instanceof HTMLIFrameElement)) {
       throw new TypeError("EPUB preview requires an iframe.");
     }
@@ -16,6 +29,11 @@ export class EpubPreview {
     this.pageAssetUrls = [];
     this.pageLoadHandler = null;
     this.pageLoadGeneration = 0;
+    this.onLayout = onLayout;
+    this.readerPage = 0;
+    this.readerPageCount = 1;
+    this.resizeObserver = null;
+    this.content = null;
   }
 
   get pageCount() {
@@ -32,11 +50,11 @@ export class EpubPreview {
     this.manifest = manifest;
     this.assetBuffers = assetBuffers;
     this.stylesheetUrl = URL.createObjectURL(
-      new Blob([manifest.stylesheet], { type: "text/css" }),
+      new Blob([manifest.stylesheet, READER_CSS], { type: "text/css" }),
     );
   }
 
-  show(index, onLoad) {
+  show(index, onLoad, readerPage = 0) {
     if (!this.manifest || !Number.isInteger(index) || index < 0 || index >= this.pageCount) {
       return null;
     }
@@ -125,6 +143,11 @@ export class EpubPreview {
       }
       if (loadedPageId !== pageLoadId) return;
       this.cancelPendingPageLoad();
+      this.content = this.frame.contentDocument.querySelector("main");
+      this.readerPage = readerPage;
+      this.layout();
+      this.resizeObserver = new ResizeObserver(() => this.layout());
+      this.resizeObserver.observe(this.frame);
       if (typeof onLoad === "function") onLoad();
     };
     this.frame.addEventListener("load", this.pageLoadHandler);
@@ -139,6 +162,25 @@ export class EpubPreview {
     return chapter;
   }
 
+  layout() {
+    if (!this.content || !this.frame.clientWidth || !this.frame.clientHeight) return;
+    const stride = this.content.getBoundingClientRect().width + 48;
+    this.readerPageCount = Math.max(1, Math.round((this.content.scrollWidth + 48) / stride));
+    this.readerPage = this.readerPage < 0
+      ? this.readerPageCount - 1
+      : Math.min(this.readerPage, this.readerPageCount - 1);
+    this.content.style.transform = `translateX(${-this.readerPage * stride}px)`;
+    this.onLayout();
+  }
+
+  turnPage(direction) {
+    const next = this.readerPage + direction;
+    if (!this.content || next < 0 || next >= this.readerPageCount) return false;
+    this.readerPage = next;
+    this.layout();
+    return true;
+  }
+
   clear() {
     this.releasePageUrls();
     if (this.stylesheetUrl) URL.revokeObjectURL(this.stylesheetUrl);
@@ -146,6 +188,8 @@ export class EpubPreview {
     this.manifest = null;
     this.assetBuffers = [];
     this.chapterIndex = 0;
+    this.readerPage = 0;
+    this.readerPageCount = 1;
   }
 
   cancelPendingPageLoad() {
@@ -156,6 +200,9 @@ export class EpubPreview {
 
   releasePageUrls() {
     this.cancelPendingPageLoad();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.content = null;
     for (const url of this.pageAssetUrls) URL.revokeObjectURL(url);
     this.pageAssetUrls = [];
   }

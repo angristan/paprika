@@ -638,6 +638,16 @@ button:disabled {
   background: var(--page);
 }
 
+.preview-stage[data-preview="output"] {
+  min-height: 0;
+  padding: 16px;
+}
+
+.preview-stage[data-preview="output"] #preview-frame {
+  max-width: 72ch;
+  height: clamp(240px, calc(100dvh - 480px), 680px);
+}
+
 .preview-stage[data-preview="source"] #preview-frame, .preview-stage[data-preview="pdf"] #preview-frame {
   height: 500px;
 }
