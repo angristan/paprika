@@ -4,7 +4,7 @@
 
 [Open Paprika in your browser](https://paprika.stanislas.cloud)
 
-![Paprika converting a paper into a reflowable EPUB](docs/screenshots/desktop-result.png)
+![Paprika’s local PDF-to-EPUB converter](docs/screenshots/desktop-empty.png)
 
 PDFs preserve pages. E-readers and phones need reading flow. Paprika rebuilds born-digital PDFs as compact EPUB 3 books with selectable text, reader-controlled typography, and local previews.
 

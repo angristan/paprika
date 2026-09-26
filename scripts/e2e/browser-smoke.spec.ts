@@ -15,21 +15,14 @@ test.beforeEach(async ({ page }) => {
 test("serves the task-first local conversion workbench", async ({ page }) => {
   await expect(page).toHaveTitle(/Paprika/);
   await expect(page.locator(".wordmark")).toContainText("Paprika");
-  const editionLabel = page.locator(".edition-label");
-  await expect(editionLabel).toHaveText(/local browser edition/i);
-  await expect(editionLabel.locator("*")).toHaveCount(0);
-  const marker = await editionLabel.evaluate(
-    (element) => getComputedStyle(element, "::before").content,
-  );
-  expect(marker).toBe("none");
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("into a book");
+  await expect(page.getByRole("link", { name: "GitHub" })).toHaveAttribute("href", "https://github.com/angristan/paprika");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("From PDF to EPUB.");
   await expect(page.locator(".task-promise")).toContainText("PDF in. Reflowable EPUB out.");
   await expect(page.getByRole("region", { name: "Convert a document" })).toBeVisible();
-  await expect(page.locator(".folio-spine")).toContainText("Local");
   await expect(page.locator("#app-shell")).toHaveAttribute("data-flow", "empty");
   await expect(page.getByRole("button", { name: "Make EPUB" })).toBeDisabled();
   await expect(page.locator("#route-source")).toHaveAttribute("aria-current", "step");
-  await expect(page.getByText(/Document bytes stay local/)).toBeVisible();
+  await expect(page.getByText(/Files are processed in this browser/)).toBeVisible();
   await expect(page.locator("#preview-frame")).toHaveAttribute("sandbox", "allow-same-origin");
 });
 

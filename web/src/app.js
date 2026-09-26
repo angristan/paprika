@@ -373,6 +373,7 @@ function showEmptyPreview() {
   blankPreviewFrame();
   epubPreview.releasePageUrls();
   sheet.hidden = false;
+  sheet.textContent = "Choose a PDF to preview its pages.";
   previewControls.hidden = true;
   previewLimit.hidden = true;
   setSelectedPreviewTab("source");
@@ -381,6 +382,9 @@ function showEmptyPreview() {
 function showPressPreview(state) {
   showEmptyPreview();
   previewStage.dataset.preview = state;
+  sheet.textContent = state === "working"
+    ? "Converting document…"
+    : "No preview available. Review the error above and retry.";
 }
 
 function setSelectedPreviewTab(tab) {
