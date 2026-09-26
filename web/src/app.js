@@ -462,8 +462,8 @@ function showOutputPreview(index = epubPreview.chapterIndex, pageTurn = null) {
     return;
   }
   previewControls.hidden = false;
-  previewPrevious.disabled = true;
-  previewNext.disabled = true;
+  previewPrevious.setAttribute("aria-disabled", "true");
+  previewNext.setAttribute("aria-disabled", "true");
   previewPosition.textContent = "Loading page…";
   previewLimit.hidden = !epubPreview.truncated;
   previewLimit.textContent = epubPreview.truncated
@@ -475,6 +475,8 @@ function updatePreviewControls() {
   const chapter = epubPreview.manifest?.chapters[epubPreview.chapterIndex];
   if (!chapter || previewStage.dataset.preview !== "output") return;
   previewControls.hidden = false;
+  previewPrevious.removeAttribute("aria-disabled");
+  previewNext.removeAttribute("aria-disabled");
   previewPrevious.disabled = epubPreview.chapterIndex === 0 && epubPreview.readerPage === 0;
   previewNext.disabled = epubPreview.chapterIndex + 1 >= epubPreview.pageCount
     && epubPreview.readerPage + 1 >= epubPreview.readerPageCount;
@@ -482,6 +484,7 @@ function updatePreviewControls() {
 }
 
 function turnPreviewPage(direction) {
+  if (!epubPreview.content) return;
   if (epubPreview.turnPage(direction === "next" ? 1 : -1)) {
     clearPreviewPageTurn();
     animatePreviewPage(direction);
